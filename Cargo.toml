@@ -6,7 +6,7 @@ edition = "2018"
 description = "Highly opinionated way to build asynchronous Websocket servers with Rust."
 repository = "https://github.com/njasm/blunt/"
 homepage = "https://github.com/njasm/blunt/"
-license = "MIT OR Apache-2.0 OR Mozilla Public License v2"
+license = "MIT OR Apache-2.0 OR MPL-2.0"
 keywords = ["websocket", "asynchronous", "async", "tokio", "framework"]
 categories = ["Websocket", "Web programming", "Network programming", "Asynchronous"]
 
