@@ -1,0 +1,18 @@
+[package]
+name = "blunt"
+version = "0.0.1"
+authors = ["Nelson J Morais <njmorais@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+async-trait = "0"
+tokio = { version = "1", features = ["full"] }
+async-tungstenite = { version = "0.13", features = ["tokio-runtime"] }
+futures = "0.3"
+uuid = { version = "0.8", features = ["v4"] }
+
+tracing = "0.1"
+tracing-futures = "0.2"
+
+[dev-dependencies]
+tracing-subscriber = "0.2"
