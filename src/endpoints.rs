@@ -1,5 +1,5 @@
 use crate::websocket::{WebSocketHandler, WebSocketMessage, WebSocketSession};
-use futures::future::BoxFuture;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -10,6 +10,7 @@ pub(crate) struct Endpoints {
 }
 
 impl Endpoints {
+    #[tracing::instrument(level = "trace")]
     pub(crate) async fn contains_path(&self, key: &str) -> bool {
         self.inner.read().await.contains_key(key)
     }
@@ -22,6 +23,7 @@ impl Endpoints {
         self.inner.write().await.insert(key.into(), handler)
     }
 
+    #[tracing::instrument(level = "trace")]
     pub(crate) async fn on_open(&self, session: &WebSocketSession) {
         let mut lock = self.inner.write().await;
         if let Some(h) = lock.get_mut(session.context().path().as_str()) {
@@ -29,6 +31,7 @@ impl Endpoints {
         }
     }
 
+    #[tracing::instrument(level = "trace")]
     pub(crate) async fn on_message(&self, session: &WebSocketSession, msg: WebSocketMessage) {
         let mut lock = self.inner.write().await;
         if let Some(h) = lock.get_mut(session.context().path().as_str()) {
@@ -36,6 +39,7 @@ impl Endpoints {
         }
     }
 
+    #[tracing::instrument(level = "trace")]
     pub(crate) async fn on_close(&self, session: &WebSocketSession, msg: WebSocketMessage) {
         let mut lock = self.inner.write().await;
         if let Some(h) = lock.get_mut(session.context().path().as_str()) {

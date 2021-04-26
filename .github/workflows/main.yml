@@ -3,6 +3,8 @@ on:
   push:
     branches:
       - master
+      - staging
+      - trying
   pull_request: {}
 
 jobs:
@@ -33,3 +35,11 @@ jobs:
 
       - name: Run the test suite
         run: cargo test
+
+  ci-pass:
+    name: 'ci-pass'
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: "Merge into master"
+        run: exit 0

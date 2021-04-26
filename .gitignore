@@ -1,5 +1,6 @@
 .vscode
 .idea
-/examples
+/examples/test.rs
+/examples/basic.rs
 /target
 Cargo.lock

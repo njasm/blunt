@@ -1,39 +1,37 @@
-#![allow(dead_code)]
-#![allow(unused_imports)]
-
 use crate::builder::Builder;
 use crate::endpoints::Endpoints;
-use crate::websocket::{ConnectionContext, WebSocketHandler, WebSocketMessage, WebSocketSession};
+use crate::websocket::{ConnectionContext, WebSocketMessage, WebSocketSession};
 
 use std::collections::HashMap;
 
 use async_tungstenite::{
-    tokio::accept_hdr_async_with_config,
+    tokio::{accept_hdr_async_with_config, TokioAdapter},
     tungstenite::{http::Request, Error},
     WebSocketStream,
 };
 
-use async_tungstenite::tokio::TokioAdapter;
 use async_tungstenite::tungstenite::http::{Response, StatusCode};
 use async_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
-use async_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Status;
+
 use async_tungstenite::tungstenite::protocol::CloseFrame;
-use futures::future::BoxFuture;
+
+use futures::SinkExt;
 use futures::StreamExt;
-use futures::{SinkExt, Stream, TryFutureExt};
 use std::borrow::Borrow;
-use std::future::Future;
+
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::AsyncRead;
+
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tokio::sync::{mpsc, RwLock};
-use tracing_futures::Instrument;
+
 use uuid::Uuid;
 
 pub mod builder;
 pub mod endpoints;
 pub mod websocket;
+
+pub use async_trait::async_trait;
 
 /// Our WebSocket Session Collection
 pub type WebSocketSessions = Arc<RwLock<HashMap<Uuid, WebSocketSession>>>;
@@ -209,7 +207,7 @@ impl Server {
         };
 
         tracing::trace!("total sessions: {}", len);
-        self.trigger_on_open(&session2).await;
+        self.endpoints.on_open(&session2).await;
     }
 
     /// Removed a web socket session from the server
@@ -222,12 +220,6 @@ impl Server {
             "Current total active sessions: {}",
             self.sessions.read().await.len()
         );
-    }
-
-    /// Notify Handler that a new web socket session was opened
-    #[tracing::instrument(level = "trace")]
-    pub async fn trigger_on_open(&mut self, session: &WebSocketSession) {
-        self.endpoints.on_open(session).await;
     }
 
     /// Receive message from the web socket connection

@@ -1,14 +1,10 @@
 use crate::Server;
 use async_tungstenite::tungstenite::http::HeaderMap;
 use core::fmt::Debug;
-use futures::{
-    stream::FuturesUnordered,
-    task::{Context, Poll},
-    Future, StreamExt, TryStreamExt,
-};
+
+use async_trait::async_trait;
 use std::net::SocketAddr;
-use std::pin::Pin;
-use std::sync::mpsc::Sender;
+
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use uuid::Uuid;
 
@@ -27,12 +23,9 @@ pub(crate) async fn register_recv_ws_message_handling(
 /// Our Websocket Message
 pub type WebSocketMessage = async_tungstenite::tungstenite::protocol::Message;
 
-use async_trait::async_trait;
-
 #[async_trait]
 pub trait WebSocketHandler: Sync + Send + Debug {
     async fn on_open(&mut self, ws: &WebSocketSession);
-    async fn on_transport_error(&mut self, ws: WebSocketSession);
     async fn on_message(&mut self, ws: &WebSocketSession, msg: WebSocketMessage);
     async fn on_close(&mut self, ws: &WebSocketSession, msg: WebSocketMessage);
 }
