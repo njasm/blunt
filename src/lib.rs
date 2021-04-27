@@ -10,11 +10,6 @@ use async_tungstenite::{
     WebSocketStream,
 };
 
-use async_tungstenite::tungstenite::http::{Response, StatusCode};
-use async_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
-
-use async_tungstenite::tungstenite::protocol::CloseFrame;
-
 use futures::SinkExt;
 use futures::StreamExt;
 use std::borrow::Borrow;
@@ -32,6 +27,9 @@ pub mod endpoints;
 pub mod websocket;
 
 pub use async_trait::async_trait;
+
+use async_tungstenite::tungstenite::http::{Response, StatusCode};
+pub use async_tungstenite::tungstenite::protocol::{frame::coding::CloseCode, CloseFrame};
 
 /// Our WebSocket Session Collection
 pub type WebSocketSessions = Arc<RwLock<HashMap<Uuid, WebSocketSession>>>;

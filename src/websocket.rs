@@ -60,6 +60,11 @@ impl WebSocketSession {
         self.tx.send(message).unwrap();
     }
 
+    /// Provides a Sender channel to send messages to the web socket connection
+    pub fn channel(&self) -> UnboundedSender<WebSocketMessage> {
+        self.tx.clone()
+    }
+
     /// Returns the http request context for this web socket connection
     pub fn context(&self) -> &ConnectionContext {
         &self.ctx
