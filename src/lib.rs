@@ -88,10 +88,13 @@ impl Server {
                         };
                     }
                     Err(e) => {
-                        let _ = server_tx2.send((session_id, Message::Close(Some(CloseFrame {
-                            code: CloseCode::Abnormal,
-                            reason: Cow::Owned(format!("ws_session_rx.next() error: {:?}", e))
-                        }))));
+                        let _ = server_tx2.send((
+                            session_id,
+                            Message::Close(Some(CloseFrame {
+                                code: CloseCode::Abnormal,
+                                reason: Cow::Owned(format!("ws_session_rx.next() error: {:?}", e)),
+                            })),
+                        ));
                         tracing::error!("ws_session_rx.next() error: {}", e);
                         return;
                     }
