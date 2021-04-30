@@ -12,7 +12,7 @@ use async_tungstenite::{
 
 use futures::SinkExt;
 use futures::StreamExt;
-use std::borrow::Borrow;
+use std::borrow::{Borrow, Cow};
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -30,6 +30,7 @@ pub use async_trait::async_trait;
 
 use async_tungstenite::tungstenite::http::{Response, StatusCode};
 pub use async_tungstenite::tungstenite::protocol::{frame::coding::CloseCode, CloseFrame};
+use async_tungstenite::tungstenite::Message;
 
 /// Our WebSocket Session Collection
 pub type WebSocketSessions = Arc<RwLock<HashMap<Uuid, WebSocketSession>>>;
@@ -87,6 +88,10 @@ impl Server {
                         };
                     }
                     Err(e) => {
+                        let _ = server_tx2.send((session_id, Message::Close(Some(CloseFrame {
+                            code: CloseCode::Abnormal,
+                            reason: Cow::Owned(format!("ws_session_rx.next() error: {:?}", e))
+                        }))));
                         tracing::error!("ws_session_rx.next() error: {}", e);
                         return;
                     }
