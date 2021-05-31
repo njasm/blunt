@@ -5,53 +5,96 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 #[derive(Debug, Clone)]
+pub(crate) enum Dispatch {
+    Open(WebSocketSession),
+    Message(WebSocketSession, WebSocketMessage),
+    Close(WebSocketSession, WebSocketMessage),
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct Endpoints {
-    inner: Arc<RwLock<HashMap<String, Box<dyn WebSocketHandler>>>>,
+    channels: Arc<RwLock<HashMap<String, tokio::sync::broadcast::Sender<Dispatch>>>>
 }
 
 impl Endpoints {
     #[tracing::instrument(level = "trace")]
     pub(crate) async fn contains_path(&self, key: &str) -> bool {
-        self.inner.read().await.contains_key(key)
+        self.channels.read().await.contains_key(key)
     }
 
     pub(crate) async fn insert(
         &mut self,
         key: impl Into<String>,
-        handler: Box<impl WebSocketHandler + 'static>,
-    ) -> Option<Box<dyn WebSocketHandler>> {
-        self.inner.write().await.insert(key.into(), handler)
+        mut handler: Box<impl WebSocketHandler + 'static>,
+    ) {
+        let (tx, mut rx) = tokio::sync::broadcast::channel::<Dispatch>(128);
+
+        let key = key.into();
+        let key2 = key.clone();
+        self.channels.write().await.insert(key, tx);
+
+        let f = async move {
+            loop {
+                match rx.recv().await {
+                    Ok(message) => {
+                        match message {
+                            Dispatch::Open(session) => handler.on_open(&session).await,
+                            Dispatch::Message(session, msg) => handler.on_message(&session, msg).await,
+                            Dispatch::Close(session, msg) => handler.on_close(&session, msg).await,
+                        }
+                    },
+                    Err(e) => tracing::error!("handler: {}: {:?}", key2, e)
+                }
+            }
+        };
+
+        tokio::spawn(f);
     }
 
     #[tracing::instrument(level = "trace")]
     pub(crate) async fn on_open(&self, session: &WebSocketSession) {
-        let mut lock = self.inner.write().await;
-        if let Some(h) = lock.get_mut(session.context().path().as_str()) {
-            h.on_open(session).await;
-        }
+        self.channels.read().await
+            .get(session.context().path().as_str())
+            .and_then(|tx| match tx.send(Dispatch::Open(session.clone())) {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    tracing::error!("{:?}", e);
+                    None
+                }
+            });
     }
 
     #[tracing::instrument(level = "trace")]
     pub(crate) async fn on_message(&self, session: &WebSocketSession, msg: WebSocketMessage) {
-        let mut lock = self.inner.write().await;
-        if let Some(h) = lock.get_mut(session.context().path().as_str()) {
-            h.on_message(session, msg).await;
-        }
+        self.channels.read().await
+            .get(session.context().path().as_str())
+            .and_then(|tx| match tx.send(Dispatch::Message(session.clone(), msg)) {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    tracing::error!("{:?}", e);
+                    None
+                }
+            });
     }
 
     #[tracing::instrument(level = "trace")]
     pub(crate) async fn on_close(&self, session: &WebSocketSession, msg: WebSocketMessage) {
-        let mut lock = self.inner.write().await;
-        if let Some(h) = lock.get_mut(session.context().path().as_str()) {
-            h.on_close(session, msg).await;
-        }
+        self.channels.read().await
+            .get(session.context().path().as_str())
+            .and_then(|tx| match tx.send(Dispatch::Close(session.clone(), msg)) {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    tracing::error!("{:?}", e);
+                    None
+                }
+            });
     }
 }
 
 impl Default for Endpoints {
     fn default() -> Self {
         Self {
-            inner: Arc::new(RwLock::new(HashMap::new())),
+            channels: Arc::new(RwLock::new(HashMap::new()))
         }
     }
 }
