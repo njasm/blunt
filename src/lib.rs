@@ -66,7 +66,9 @@ impl Server {
         tokio::spawn(async move {
             while let Some(result) = rx.recv().await {
                 tracing::trace!("Sending message to websocket connection: {:?}", result);
-                ws_session_tx.send(result).await.unwrap();
+                if let Err(e) = ws_session_tx.send(result).await {
+                    tracing::error!("Unable to send message to websocket: {:?}", e);
+                }
             }
         });
 
