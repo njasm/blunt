@@ -2,7 +2,6 @@ use blunt::websocket::{WebSocketHandler, WebSocketMessage, WebSocketSession};
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-
     let handler = EchoServer::default();
     ::blunt::builder()
         .for_path("/echo", handler)
@@ -23,7 +22,8 @@ impl WebSocketHandler for EchoServer {
     }
 
     async fn on_message(&mut self, ws: &WebSocketSession, msg: WebSocketMessage) {
-        println!("echo back for session id {}, with message: {}",
+        println!(
+            "echo back for session id {}, with message: {}",
             ws.id(),
             msg
         );
