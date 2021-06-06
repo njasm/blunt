@@ -28,7 +28,8 @@ impl Endpoints {
     ) {
         let (tx, mut rx) = channel::<Dispatch>(128);
 
-        let key2 = key.clone();
+        #[allow(clippy::clone_double_ref)]
+        let key2 = key.to_string();
         self.channels.insert(key, tx);
 
         let f = async move {
