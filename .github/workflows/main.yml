@@ -36,6 +36,9 @@ jobs:
       - name: Run the test suite
         run: cargo test
 
+      - name: Run benchmarks
+        run: cargo bench --verbose
+
   ci-pass:
     name: 'ci-pass'
     runs-on: ubuntu-latest
