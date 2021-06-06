@@ -27,8 +27,6 @@ impl Endpoints {
         mut handler: Box<impl WebSocketHandler + 'static>,
     ) {
         let (tx, mut rx) = channel::<Dispatch>(128);
-
-        #[allow(clippy::clone_double_ref)]
         let key2 = key.to_string();
         self.channels.insert(key, tx);
 
