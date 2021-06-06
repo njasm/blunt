@@ -1,9 +1,9 @@
 use blunt::websocket::{WebSocketHandler, WebSocketMessage, WebSocketSession};
 use std::collections::HashMap;
-use uuid::Uuid;
+use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::RwLock;
-use std::sync::Arc;
+use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
@@ -24,15 +24,11 @@ pub struct ChatServer(UserCollection);
 
 impl ChatServer {
     async fn broadcast(&mut self, except_id: Uuid, msg: WebSocketMessage) {
-        self.0
-            .read()
-            .await
-            .iter()
-            .for_each(|entry| {
-                if entry.0 != &except_id {
-                    let _ = entry.1.send(msg.clone());
-                }
-            });
+        self.0.read().await.iter().for_each(|entry| {
+            if entry.0 != &except_id {
+                let _ = entry.1.send(msg.clone());
+            }
+        });
     }
 }
 
@@ -52,16 +48,15 @@ impl WebSocketHandler for ChatServer {
         // for the sake of the example, lets just handle text messages
         let final_msg = match msg {
             WebSocketMessage::Text(t) => format!("{}: {}", ws.id(), t),
-            _ => format!("{}: {}", ws.id(), "")
+            _ => format!("{}: {}", ws.id(), ""),
         };
 
-        self.broadcast(ws.id(), WebSocketMessage::Text(final_msg)).await;
+        self.broadcast(ws.id(), WebSocketMessage::Text(final_msg))
+            .await;
     }
 
     async fn on_close(&mut self, ws: &WebSocketSession, _msg: WebSocketMessage) {
-        let _ = {
-            self.0.write().await.remove(&ws.id())
-        };
+        let _ = { self.0.write().await.remove(&ws.id()) };
 
         let msg = format!("User {} left the chat.", ws.id());
         self.broadcast(ws.id(), WebSocketMessage::Text(msg)).await;
