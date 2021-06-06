@@ -98,11 +98,28 @@ impl Default for Endpoints {
 
 #[cfg(test)]
 mod tests {
+    use crate::websocket::{WebSocketHandler, WebSocketMessage, WebSocketSession};
+
+    #[derive(Debug, Default)]
+    struct Handler;
+
+    #[crate::async_trait]
+    impl WebSocketHandler for Handler {
+        async fn on_open(&mut self, _ws: &WebSocketSession) {}
+        async fn on_message(&mut self, _ws: &WebSocketSession, _msg: WebSocketMessage) {}
+        async fn on_close(&mut self, _ws: &WebSocketSession, _msg: WebSocketMessage) {}
+    }
+
     #[tokio::test]
     async fn endpoint_contains_key() {
-        let e = crate::Endpoints::default();
+        let mut e = crate::Endpoints::default();
         let key = "ws";
 
         assert_eq!(e.contains_path(key).await, false);
+
+        let h = Handler::default();
+        e.insert(key, Box::new(h));
+
+        assert_eq!(e.contains_path(key).await, true);
     }
 }
