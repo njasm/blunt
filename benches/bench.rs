@@ -1,5 +1,5 @@
+use blunt::websocket::{WebSocketHandler, WebSocketMessage, WebSocketSession};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use blunt::websocket::{WebSocketMessage, WebSocketSession, WebSocketHandler};
 use tokio::task::JoinHandle;
 
 #[derive(Debug, Default)]
@@ -32,10 +32,9 @@ fn echo_benchmark(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
         let _server_handle = start_echo_server();
-        let (mut socket, _response) =
-            connect("ws://localhost:9999/echo").expect("Can't connect");
+        let (mut socket, _response) = connect("ws://localhost:9999/echo").expect("Can't connect");
 
-        c.bench_function("echo server 100", |b|
+        c.bench_function("echo server 100", |b| {
             b.iter(|| {
                 let ws_message = Message::Text(String::from("Hello World!"));
                 for _n in 1..=100 {
@@ -43,9 +42,9 @@ fn echo_benchmark(c: &mut Criterion) {
                     let _ = socket.read_message().expect("Error reading message");
                 }
             })
-        );
+        });
 
-        c.bench_function("echo server 1000", |b|
+        c.bench_function("echo server 1000", |b| {
             b.iter(|| {
                 let ws_message = Message::Text(String::from("Hello World!"));
                 for _n in 1..=1000 {
@@ -53,9 +52,9 @@ fn echo_benchmark(c: &mut Criterion) {
                     let _ = socket.read_message().expect("Error reading message");
                 }
             })
-        );
+        });
 
-        c.bench_function("echo server 10000", |b|
+        c.bench_function("echo server 10000", |b| {
             b.iter(|| {
                 let ws_message = Message::Text(String::from("Hello World!"));
                 for _n in 1..=10000 {
@@ -63,10 +62,9 @@ fn echo_benchmark(c: &mut Criterion) {
                     let _ = socket.read_message().expect("Error reading message");
                 }
             })
-        );
+        });
     });
 }
 
 criterion_group!(benches, echo_benchmark);
 criterion_main!(benches);
-
