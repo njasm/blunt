@@ -1,8 +1,7 @@
 use crate::websocket::{WebSocketHandler, WebSocketMessage, WebSocketSession};
 
 use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::broadcast::{channel, Sender};
 
 #[derive(Debug, Clone)]
 pub(crate) enum Dispatch {
@@ -13,37 +12,35 @@ pub(crate) enum Dispatch {
 
 #[derive(Debug, Clone)]
 pub(crate) struct Endpoints {
-    channels: Arc<RwLock<HashMap<String, tokio::sync::broadcast::Sender<Dispatch>>>>
+    channels: HashMap<&'static str, Sender<Dispatch>>,
 }
 
 impl Endpoints {
     #[tracing::instrument(level = "trace")]
     pub(crate) async fn contains_path(&self, key: &str) -> bool {
-        self.channels.read().await.contains_key(key)
+        self.channels.contains_key(key)
     }
 
-    pub(crate) async fn insert(
+    pub(crate) fn insert(
         &mut self,
-        key: impl Into<String>,
+        key: &'static str,
         mut handler: Box<impl WebSocketHandler + 'static>,
     ) {
-        let (tx, mut rx) = tokio::sync::broadcast::channel::<Dispatch>(128);
+        let (tx, mut rx) = channel::<Dispatch>(128);
 
-        let key = key.into();
-        let key2 = key.clone();
-        self.channels.write().await.insert(key, tx);
+        #[allow(clippy::clone_double_ref)]
+        let key2 = key.to_string();
+        self.channels.insert(key, tx);
 
         let f = async move {
             loop {
                 match rx.recv().await {
-                    Ok(message) => {
-                        match message {
-                            Dispatch::Open(session) => handler.on_open(&session).await,
-                            Dispatch::Message(session, msg) => handler.on_message(&session, msg).await,
-                            Dispatch::Close(session, msg) => handler.on_close(&session, msg).await,
-                        }
+                    Ok(message) => match message {
+                        Dispatch::Open(session) => handler.on_open(&session).await,
+                        Dispatch::Message(session, msg) => handler.on_message(&session, msg).await,
+                        Dispatch::Close(session, msg) => handler.on_close(&session, msg).await,
                     },
-                    Err(e) => tracing::error!("handler: {}: {:?}", key2, e)
+                    Err(e) => tracing::error!("handler endpoint: {}: {:?}", key2, e),
                 }
             }
         };
@@ -53,7 +50,7 @@ impl Endpoints {
 
     #[tracing::instrument(level = "trace")]
     pub(crate) async fn on_open(&self, session: &WebSocketSession) {
-        self.channels.read().await
+        self.channels
             .get(session.context().path().as_str())
             .and_then(|tx| match tx.send(Dispatch::Open(session.clone())) {
                 Ok(t) => Some(t),
@@ -66,20 +63,22 @@ impl Endpoints {
 
     #[tracing::instrument(level = "trace")]
     pub(crate) async fn on_message(&self, session: &WebSocketSession, msg: WebSocketMessage) {
-        self.channels.read().await
+        self.channels
             .get(session.context().path().as_str())
-            .and_then(|tx| match tx.send(Dispatch::Message(session.clone(), msg)) {
-                Ok(t) => Some(t),
-                Err(e) => {
-                    tracing::error!("{:?}", e);
-                    None
-                }
-            });
+            .and_then(
+                |tx| match tx.send(Dispatch::Message(session.clone(), msg)) {
+                    Ok(t) => Some(t),
+                    Err(e) => {
+                        tracing::error!("{:?}", e);
+                        None
+                    }
+                },
+            );
     }
 
     #[tracing::instrument(level = "trace")]
     pub(crate) async fn on_close(&self, session: &WebSocketSession, msg: WebSocketMessage) {
-        self.channels.read().await
+        self.channels
             .get(session.context().path().as_str())
             .and_then(|tx| match tx.send(Dispatch::Close(session.clone(), msg)) {
                 Ok(t) => Some(t),
@@ -94,7 +93,7 @@ impl Endpoints {
 impl Default for Endpoints {
     fn default() -> Self {
         Self {
-            channels: Arc::new(RwLock::new(HashMap::new()))
+            channels: HashMap::new(),
         }
     }
 }

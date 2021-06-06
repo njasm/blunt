@@ -20,17 +20,11 @@ impl Builder {
     }
 
     pub fn for_path(
-        self,
-        path: impl Into<String>,
+        mut self,
+        path: &'static str,
         handler: impl WebSocketHandler + 'static,
     ) -> Builder {
-        let mut this = self.clone();
-        let path = path.into();
-
-        let rt = tokio::runtime::Handle::current();
-        rt.spawn(async move {
-            this.endpoints.insert(path, Box::new(handler)).await;
-        });
+        self.endpoints.insert(path, Box::new(handler));
 
         Builder { ..self }
     }
