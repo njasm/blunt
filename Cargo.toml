@@ -1,6 +1,6 @@
 [package]
 name = "blunt"
-version = "0.0.4"
+version = "0.0.5"
 authors = ["Nelson J Morais <njmorais@gmail.com>"]
 edition = "2018"
 description = "Highly opinionated way to build asynchronous Websocket servers with Rust."
@@ -9,6 +9,14 @@ homepage = "https://github.com/njasm/blunt/"
 license = "MIT OR Apache-2.0 OR MPL-2.0"
 keywords = ["websocket", "asynchronous", "async", "tokio", "framework"]
 categories = ["web-programming::websocket", "web-programming", "network-programming", "asynchronous"]
+exclude = [
+	".github/*",
+	"examples/*"
+]
+include = [
+	"**/*.rs",
+	"Cargo.toml"
+]
 
 [dependencies]
 async-trait = "0"
