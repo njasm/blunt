@@ -32,3 +32,10 @@ tracing-futures = "0.2"
 [dev-dependencies]
 tracing-subscriber = "0.2"
 tracing-appender = "0.1"
+criterion = "0.3"
+tungstenite = "0.13"
+
+[[bench]]
+name = "bench"
+harness = false
+
