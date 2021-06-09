@@ -163,9 +163,9 @@ impl Server {
     }
 
     /// Add a new web socket session to the server after a successful connection upgrade
-    #[tracing::instrument(level = "trace")]
+    #[tracing::instrument(level = "trace", skip(self, session))]
     async fn add_session(&mut self, session: WebSocketSession) {
-        tracing::trace!("adding session: {:?}", session.id());
+        tracing::trace!("adding session: {:?}, for path: {}", session.id(), session.context().path());
         let session2 = session.clone();
         let len: usize = {
             let mut lock = self.sessions.write().await;
@@ -178,7 +178,7 @@ impl Server {
     }
 
     /// Removed a web socket session from the server
-    #[tracing::instrument(level = "trace")]
+    #[tracing::instrument(level = "trace", skip(self))]
     async fn remove_session(&self, session_id: Uuid) {
         let s = self.sessions.write().await.remove(session_id.borrow());
         drop(s);
@@ -190,7 +190,7 @@ impl Server {
     }
 
     /// Receive message from the web socket connection
-    #[tracing::instrument(level = "trace")]
+    #[tracing::instrument(level = "trace", , skip(self, message))]
     pub async fn recv(&mut self, session_id: Uuid, message: WebSocketMessage) {
         let session = {
             let lock = self.sessions.read().await;

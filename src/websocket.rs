@@ -37,13 +37,14 @@ pub(crate) async fn register_recv_ws_message_handling(
                         reason: std::borrow::Cow::Owned(error_message),
                     };
 
+                    tracing::warn!("Dropping channel 'ws_session_rx' -> server::recv()");
                     server.recv(session_id, Message::Close(Some(frame))).await;
                     return;
                 }
             }
         }
 
-        tracing::trace!("we are leaving the gibson - channel dropped");
+        tracing::warn!("we are leaving the gibson - channel dropped");
     });
 }
 
@@ -57,6 +58,7 @@ pub(crate) async fn register_send_to_ws_message_handling(
             tracing::trace!("Sending to websocket: {:?}", result);
             if let Err(e) = ws_session_tx.send(result).await {
                 tracing::error!("Sending to websocket: {:?}", e);
+                tracing::warn!("Dropping channel server -> 'ws_session_rx'");
                 return;
             }
         }
