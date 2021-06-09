@@ -5,17 +5,60 @@ use core::fmt::Debug;
 use async_trait::async_trait;
 use std::net::SocketAddr;
 
+use async_tungstenite::tokio::TokioAdapter;
+use async_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+use async_tungstenite::tungstenite::protocol::CloseFrame;
+use async_tungstenite::tungstenite::Message;
+use async_tungstenite::WebSocketStream;
+use futures::stream::{SplitSink, SplitStream};
+use futures::{SinkExt, StreamExt};
+use tokio::net::TcpStream;
+use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use uuid::Uuid;
 
 /// Async task to receive messages from the web socket connection
 pub(crate) async fn register_recv_ws_message_handling(
     mut server: Server,
-    mut rx: UnboundedReceiver<(Uuid, WebSocketMessage)>,
+    mut ws_session_rx: SplitStream<WebSocketStream<TokioAdapter<TcpStream>>>,
+    session_id: impl Into<Uuid>,
+) {
+    let session_id = session_id.into();
+    tokio::spawn(async move {
+        while let Some(result) = ws_session_rx.next().await {
+            match result {
+                Ok(msg) => server.recv(session_id, msg).await,
+                Err(e) => {
+                    let error_message = format!("Receive from websocket: {:?}", e);
+                    tracing::error!("{}", error_message);
+
+                    let frame = CloseFrame {
+                        code: CloseCode::Abnormal,
+                        reason: std::borrow::Cow::Owned(error_message),
+                    };
+
+                    server.recv(session_id, Message::Close(Some(frame))).await;
+                    return;
+                }
+            }
+        }
+
+        tracing::trace!("we are leaving the gibson - channel dropped");
+    });
+}
+
+/// Async task to send messages to the web socket connection
+pub(crate) async fn register_send_to_ws_message_handling(
+    mut ws_session_tx: SplitSink<WebSocketStream<TokioAdapter<TcpStream>>, WebSocketMessage>,
+    mut rx: UnboundedReceiver<WebSocketMessage>,
 ) {
     tokio::spawn(async move {
-        while let Some(data) = rx.recv().await {
-            server.recv(data.0, data.1).await;
+        while let Some(result) = rx.recv().await {
+            tracing::trace!("Sending to websocket: {:?}", result);
+            if let Err(e) = ws_session_tx.send(result).await {
+                tracing::error!("Sending to websocket: {:?}", e);
+                return;
+            }
         }
     });
 }
@@ -33,11 +76,11 @@ pub trait WebSocketHandler: Sync + Send + Debug {
 /// Our websocket wrapper
 #[derive(Clone, Debug)]
 pub struct WebSocketSession {
-    // session id
+    /// session id
     id: Uuid,
-    // this connection context
+    /// this connection context
     ctx: ConnectionContext,
-    // buffer, send to socket messages
+    /// buffer, send to socket messages
     tx: UnboundedSender<WebSocketMessage>,
 }
 
@@ -56,8 +99,8 @@ impl WebSocketSession {
     }
 
     /// Send message to the web socket connection
-    pub fn send(&self, message: WebSocketMessage) {
-        self.tx.send(message).unwrap();
+    pub fn send(&self, message: WebSocketMessage) -> Result<(), SendError<WebSocketMessage>> {
+        self.tx.send(message)
     }
 
     /// Provides a Sender channel to send messages to the web socket connection
