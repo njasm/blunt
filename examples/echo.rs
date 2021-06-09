@@ -27,7 +27,7 @@ impl WebSocketHandler for EchoServer {
             ws.id(),
             msg
         );
-        ws.send(msg);
+        ws.send(msg).expect("Unable to send message");
     }
 
     async fn on_close(&mut self, ws: &WebSocketSession, _msg: WebSocketMessage) {

@@ -10,9 +10,8 @@ use async_tungstenite::{
     WebSocketStream,
 };
 
-use futures::SinkExt;
 use futures::StreamExt;
-use std::borrow::{Borrow, Cow};
+use std::borrow::Borrow;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -30,7 +29,6 @@ pub use async_trait::async_trait;
 
 use async_tungstenite::tungstenite::http::{Response, StatusCode};
 pub use async_tungstenite::tungstenite::protocol::{frame::coding::CloseCode, CloseFrame};
-use async_tungstenite::tungstenite::Message;
 
 /// Our WebSocket Session Collection
 pub type WebSocketSessions = Arc<RwLock<HashMap<Uuid, WebSocketSession>>>;
@@ -54,59 +52,20 @@ impl Server {
         socket: WebSocketStream<TokioAdapter<TcpStream>>,
         ctx: ConnectionContext,
     ) {
-        let (mut ws_session_tx, mut ws_session_rx) = socket.split();
-        let (tx, mut rx) = mpsc::unbounded_channel::<WebSocketMessage>();
-        let (server_tx, server_rx) = mpsc::unbounded_channel::<(Uuid, WebSocketMessage)>();
-
-        // async task to receive messages from the web socket connection
-        let ws_server2 = self.clone();
-        websocket::register_recv_ws_message_handling(ws_server2, server_rx).await;
-
-        // async task to send messages to the web socket connection
-        tokio::spawn(async move {
-            while let Some(result) = rx.recv().await {
-                tracing::trace!("Sending message to websocket connection: {:?}", result);
-                if let Err(e) = ws_session_tx.send(result).await {
-                    tracing::error!("Unable to send message to websocket: {:?}", e);
-                }
-            }
-        });
+        let (ws_session_tx, ws_session_rx) = socket.split();
+        let (tx, rx) = mpsc::unbounded_channel::<WebSocketMessage>();
 
         let session = WebSocketSession::new(ctx, tx);
         let session_id = session.id();
+
+        // async task to receive messages from the web socket connection
+        let ws_server2 = self.clone();
+        websocket::register_recv_ws_message_handling(ws_server2, ws_session_rx, session_id).await;
+
+        // async task to send messages to the web socket connection
+        websocket::register_send_to_ws_message_handling(ws_session_tx, rx).await;
+
         self.add_session(session).await;
-
-        // async task to process any incoming messages from the web socket connection
-        let server_tx2 = server_tx.clone();
-        let f = async move {
-            while let Some(result) = ws_session_rx.next().await {
-                match result {
-                    Ok(msg) => {
-                        match server_tx2.send((session_id, msg)) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                tracing::error!("ERROR SENDING TO server_tx2 channel: {}", e)
-                            }
-                        };
-                    }
-                    Err(e) => {
-                        let _ = server_tx2.send((
-                            session_id,
-                            Message::Close(Some(CloseFrame {
-                                code: CloseCode::Abnormal,
-                                reason: Cow::Owned(format!("ws_session_rx.next() error: {:?}", e)),
-                            })),
-                        ));
-                        tracing::error!("ws_session_rx.next() error: {}", e);
-                        return;
-                    }
-                }
-            }
-
-            tracing::trace!("we are leaving the gibson - channel dropped");
-        };
-
-        tokio::task::spawn(f);
     }
 
     async fn handle_connection(

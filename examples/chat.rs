@@ -39,7 +39,9 @@ impl WebSocketHandler for ChatServer {
             self.0.write().await.insert(ws.id(), ws.channel());
         }
 
-        ws.send(WebSocketMessage::Text(String::from("Welcome!")));
+        ws.send(WebSocketMessage::Text(String::from("Welcome!")))
+            .expect("Unable to send message");
+
         let msg = format!("User {} joined the chat.", ws.id());
         self.broadcast(ws.id(), WebSocketMessage::Text(msg)).await;
     }
