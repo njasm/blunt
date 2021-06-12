@@ -29,6 +29,7 @@ pub use async_trait::async_trait;
 
 use async_tungstenite::tungstenite::http::{Response, StatusCode};
 pub use async_tungstenite::tungstenite::protocol::{frame::coding::CloseCode, CloseFrame};
+use tracing::error;
 
 /// Our WebSocket Session Collection
 pub type WebSocketSessions = Arc<RwLock<HashMap<Uuid, WebSocketSession>>>;
@@ -94,9 +95,18 @@ impl Server {
             Ok(response)
         };
 
-        let mut ws_stream = accept_hdr_async_with_config(stream, callback, None)
-            .await
-            .expect("failed");
+        let mut ws_stream = match accept_hdr_async_with_config(stream, callback, None).await {
+            Ok(ws) => ws,
+            Err(e) => {
+                error!("Error: {:?}", e);
+                return Err(Error::Http(
+                    Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body(None)
+                        .unwrap(),
+                ));
+            }
+        };
 
         let conn_data = match rx.await {
             Ok(d) => d,
