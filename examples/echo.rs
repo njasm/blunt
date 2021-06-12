@@ -7,7 +7,7 @@ async fn main() -> std::io::Result<()> {
     if std::env::var("RUST_LOG").is_err() {
         std::env::set_var("RUST_LOG", "blunt=trace");
     }
-
+    // just for a nice compact tracing messages
     FmtSubscriber::builder()
         .with_env_filter(EnvFilter::from_default_env())
         .with_thread_ids(true)
@@ -16,6 +16,7 @@ async fn main() -> std::io::Result<()> {
         .compact()
         .init();
 
+    // just what's actually needed
     let handler = EchoServer::default();
     ::blunt::builder()
         .for_path("/echo", handler)
