@@ -1,6 +1,6 @@
 use blunt::websocket::{WebSocketHandler, WebSocketMessage, WebSocketSession};
-use tracing_subscriber::{FmtSubscriber, EnvFilter};
 use tracing::info;
+use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {

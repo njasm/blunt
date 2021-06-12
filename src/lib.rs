@@ -175,7 +175,11 @@ impl Server {
     /// Add a new web socket session to the server after a successful connection upgrade
     #[tracing::instrument(level = "trace", skip(self, session))]
     async fn add_session(&mut self, session: WebSocketSession) {
-        tracing::trace!("adding session: {:?}, for path: {}", session.id(), session.context().path());
+        tracing::trace!(
+            "adding session: {:?}, for path: {}",
+            session.id(),
+            session.context().path()
+        );
         let session2 = session.clone();
         let len: usize = {
             let mut lock = self.sessions.write().await;
