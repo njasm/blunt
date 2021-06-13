@@ -16,6 +16,7 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use uuid::Uuid;
+use tracing_futures::Instrument;
 
 /// Async task to receive messages from the web socket connection
 pub(crate) async fn register_recv_ws_message_handling(
@@ -45,7 +46,7 @@ pub(crate) async fn register_recv_ws_message_handling(
         }
 
         tracing::warn!("we are leaving the gibson - channel dropped");
-    });
+    }.instrument(tracing::trace_span!("recv_from_ws_task")));
 }
 
 /// Async task to send messages to the web socket connection
@@ -62,7 +63,7 @@ pub(crate) async fn register_send_to_ws_message_handling(
                 return;
             }
         }
-    });
+    }.instrument(tracing::trace_span!("send_to_ws_task")));
 }
 
 /// Our Websocket Message

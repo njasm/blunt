@@ -16,6 +16,11 @@ pub(crate) struct Endpoints {
 }
 
 impl Endpoints {
+    pub(crate) fn get_paths(&self) -> Vec<&'static str> {
+        #[allow(clippy::map_clone)]
+        self.channels.keys().clone().map(|k| *k).collect()
+    }
+
     #[tracing::instrument(level = "trace")]
     pub(crate) async fn contains_path(&self, key: &str) -> bool {
         self.channels.contains_key(key)
