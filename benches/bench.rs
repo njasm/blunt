@@ -22,7 +22,7 @@ fn start_echo_server() -> JoinHandle<()> {
         let _ = ::blunt::builder()
             .for_path("/echo", handler)
             .build()
-            .bind("127.0.0.1:9999")
+            .bind("127.0.0.1:9999".parse().expect("Invalid Socket Addr"))
             .await;
     })
 }
@@ -144,7 +144,7 @@ fn start_multi_echo_server() -> JoinHandle<()> {
             .for_path("/echo", handler)
             .for_path("/echo2", handler2)
             .build()
-            .bind("127.0.0.1:9999")
+            .bind("127.0.0.1:9999".parse().expect("Invalid Socket Addr"))
             .await;
     })
 }

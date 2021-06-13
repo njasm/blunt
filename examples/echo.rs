@@ -3,7 +3,7 @@ use tracing::info;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
+async fn main() -> hyper::Result<()> {
     if std::env::var("RUST_LOG").is_err() {
         std::env::set_var("RUST_LOG", "blunt=trace");
     }
@@ -21,7 +21,7 @@ async fn main() -> std::io::Result<()> {
     ::blunt::builder()
         .for_path("/echo", handler)
         .build()
-        .bind("127.0.0.1:3000")
+        .bind("127.0.0.1:3000".parse().expect("Invalid Socket Addr"))
         .await?;
 
     Ok(())

@@ -1,14 +1,12 @@
+mod service;
+
 use crate::builder::Builder;
 use crate::endpoints::Endpoints;
 use crate::websocket::{ConnectionContext, WebSocketMessage, WebSocketSession};
 
 use std::collections::HashMap;
 
-use async_tungstenite::{
-    tokio::{accept_hdr_async_with_config, TokioAdapter},
-    tungstenite::{http::Request, Error},
-    WebSocketStream,
-};
+use async_tungstenite::{tokio::TokioAdapter, WebSocketStream};
 
 use futures::StreamExt;
 use std::borrow::Borrow;
@@ -16,7 +14,7 @@ use std::borrow::Borrow;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
+use tokio::net::TcpStream;
 use tokio::sync::{mpsc, RwLock};
 
 use uuid::Uuid;
@@ -26,10 +24,7 @@ pub mod endpoints;
 pub mod websocket;
 
 pub use async_trait::async_trait;
-
-use async_tungstenite::tungstenite::http::{Response, StatusCode};
 pub use async_tungstenite::tungstenite::protocol::{frame::coding::CloseCode, CloseFrame};
-use tracing::error;
 
 /// Our WebSocket Session Collection
 pub type WebSocketSessions = Arc<RwLock<HashMap<Uuid, WebSocketSession>>>;
@@ -48,6 +43,7 @@ impl Server {
         }
     }
 
+    #[tracing::instrument(level = "trace", skip(self, socket, ctx))]
     async fn handle_new_session(
         &mut self,
         socket: WebSocketStream<TokioAdapter<TcpStream>>,
@@ -69,107 +65,8 @@ impl Server {
         self.add_session(session).await;
     }
 
-    async fn handle_connection(
-        &mut self,
-        peer: SocketAddr,
-        stream: TcpStream,
-    ) -> async_tungstenite::tungstenite::Result<()> {
-        type HttpResponse = async_tungstenite::tungstenite::http::Response<()>;
-
-        let (tx, rx) = tokio::sync::oneshot::channel();
-
-        let callback = move |request: &Request<()>, mut response: HttpResponse| {
-            let header_options = request.headers().clone();
-            let path = request.uri().path().to_owned();
-            let query = match request.uri().query() {
-                Some(s) => Some(s.to_string()),
-                _ => Some("".to_string()),
-            };
-
-            if tx.send((header_options, path, query)).is_err() {
-                tracing::error!("Unable to upgrade connection");
-                let status = response.status_mut();
-                *status = StatusCode::from_u16(500).unwrap();
-            }
-
-            Ok(response)
-        };
-
-        let mut ws_stream = match accept_hdr_async_with_config(stream, callback, None).await {
-            Ok(ws) => ws,
-            Err(e) => {
-                error!("Error: {:?}", e);
-                return Err(Error::Http(
-                    Response::builder()
-                        .status(StatusCode::NOT_FOUND)
-                        .body(None)
-                        .unwrap(),
-                ));
-            }
-        };
-
-        let conn_data = match rx.await {
-            Ok(d) => d,
-            _ => panic!("Unable to receive connection context for upgrade"),
-        };
-
-        if !self.endpoints.contains_path(&conn_data.1).await {
-            let err_message = format!(
-                "Unable to find Web socket handler for path: {}",
-                conn_data.1
-            );
-            tracing::trace!("{}", err_message);
-            let frame = CloseFrame {
-                code: CloseCode::Policy,
-                reason: Default::default(),
-            };
-
-            let _ = ws_stream.close(Some(frame)).await;
-
-            return Err(Error::Http(
-                Response::builder()
-                    .status(StatusCode::NOT_FOUND)
-                    .body(None)
-                    .unwrap(),
-            ));
-        }
-
-        let ctx = ConnectionContext::new(
-            Some(peer),
-            conn_data.0,
-            conn_data.2.unwrap(),
-            conn_data.1.to_string(),
-        );
-        self.handle_new_session(ws_stream, ctx).await;
-
-        Ok(())
-    }
-
-    async fn accept_connection(&mut self, peer: SocketAddr, stream: TcpStream) {
-        if let Err(e) = self.handle_connection(peer, stream).await {
-            match e {
-                Error::ConnectionClosed | Error::Protocol(_) | Error::Utf8 => (),
-                err => tracing::error!("Error processing connection: {}", err),
-            }
-        }
-    }
-
-    pub async fn bind(&mut self, addrs: impl ToSocketAddrs) -> std::io::Result<()> {
-        let listener = TcpListener::bind(addrs).await?;
-
-        while let Ok((stream, _sock_addr)) = listener.accept().await {
-            match stream.peer_addr() {
-                Ok(addr) => {
-                    tracing::info!("connected stream's peer address: {}", addr);
-                    self.accept_connection(addr, stream).await
-                }
-                Err(_) => {
-                    tracing::warn!("connected streams should have a peer address");
-                }
-            };
-        }
-
-        Ok(())
+    pub async fn bind(self, addrs: SocketAddr) -> hyper::Result<()> {
+        service::HttpService::new(self).serve(addrs).await.await
     }
 
     /// Add a new web socket session to the server after a successful connection upgrade

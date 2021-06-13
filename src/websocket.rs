@@ -15,6 +15,7 @@ use futures::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tracing_futures::Instrument;
 use uuid::Uuid;
 
 /// Async task to receive messages from the web socket connection
@@ -24,28 +25,31 @@ pub(crate) async fn register_recv_ws_message_handling(
     session_id: impl Into<Uuid>,
 ) {
     let session_id = session_id.into();
-    tokio::spawn(async move {
-        while let Some(result) = ws_session_rx.next().await {
-            match result {
-                Ok(msg) => server.recv(session_id, msg).await,
-                Err(e) => {
-                    let error_message = format!("Receive from websocket: {:?}", e);
-                    tracing::error!("{}", error_message);
+    tokio::spawn(
+        async move {
+            while let Some(result) = ws_session_rx.next().await {
+                match result {
+                    Ok(msg) => server.recv(session_id, msg).await,
+                    Err(e) => {
+                        let error_message = format!("Receive from websocket: {:?}", e);
+                        tracing::error!("{}", error_message);
 
-                    let frame = CloseFrame {
-                        code: CloseCode::Abnormal,
-                        reason: std::borrow::Cow::Owned(error_message),
-                    };
+                        let frame = CloseFrame {
+                            code: CloseCode::Abnormal,
+                            reason: std::borrow::Cow::Owned(error_message),
+                        };
 
-                    tracing::warn!("Dropping channel 'ws_session_rx' -> server::recv()");
-                    server.recv(session_id, Message::Close(Some(frame))).await;
-                    return;
+                        tracing::warn!("Dropping channel 'ws_session_rx' -> server::recv()");
+                        server.recv(session_id, Message::Close(Some(frame))).await;
+                        return;
+                    }
                 }
             }
-        }
 
-        tracing::warn!("we are leaving the gibson - channel dropped");
-    });
+            tracing::warn!("we are leaving the gibson - channel dropped");
+        }
+        .instrument(tracing::trace_span!("recv_from_ws_task")),
+    );
 }
 
 /// Async task to send messages to the web socket connection
@@ -53,16 +57,19 @@ pub(crate) async fn register_send_to_ws_message_handling(
     mut ws_session_tx: SplitSink<WebSocketStream<TokioAdapter<TcpStream>>, WebSocketMessage>,
     mut rx: UnboundedReceiver<WebSocketMessage>,
 ) {
-    tokio::spawn(async move {
-        while let Some(result) = rx.recv().await {
-            tracing::trace!("Sending to websocket: {:?}", result);
-            if let Err(e) = ws_session_tx.send(result).await {
-                tracing::error!("Sending to websocket: {:?}", e);
-                tracing::warn!("Dropping channel server -> 'ws_session_rx'");
-                return;
+    tokio::spawn(
+        async move {
+            while let Some(result) = rx.recv().await {
+                tracing::trace!("Sending to websocket: {:?}", result);
+                if let Err(e) = ws_session_tx.send(result).await {
+                    tracing::error!("Sending to websocket: {:?}", e);
+                    tracing::warn!("Dropping channel server -> 'ws_session_rx'");
+                    return;
+                }
             }
         }
-    });
+        .instrument(tracing::trace_span!("send_to_ws_task")),
+    );
 }
 
 /// Our Websocket Message

@@ -6,12 +6,12 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
+async fn main() -> hyper::Result<()> {
     let handler = ChatServer::default();
     ::blunt::builder()
         .for_path("/chat", handler)
         .build()
-        .bind("127.0.0.1:3000")
+        .bind("127.0.0.1:3000".parse().expect("Invalid Socket Addr"))
         .await?;
 
     Ok(())
