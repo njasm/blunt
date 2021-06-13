@@ -18,7 +18,7 @@ use tokio::sync::oneshot::{channel, Sender};
 
 pub(crate) struct Router {
     tx: Option<Sender<Connection>>,
-    paths: Vec<&'static str>
+    paths: Vec<&'static str>,
 }
 
 impl Service<Request<Body>> for Router {
@@ -155,7 +155,12 @@ impl Service<&AddrStream> for HttpService {
             };
         });
 
-        Box::pin(async move { Ok(Router { tx: Some(tx), paths }) })
+        Box::pin(async move {
+            Ok(Router {
+                tx: Some(tx),
+                paths,
+            })
+        })
     }
 }
 
