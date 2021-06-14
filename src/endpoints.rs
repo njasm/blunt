@@ -130,7 +130,7 @@ impl Endpoints {
         self.web_channels.insert(key, tx);
 
         let f = async move {
-            use tokio::sync::broadcast::RecvError;
+            use tokio::sync::broadcast::error::RecvError;
             'out: loop {
                 match rx.recv().await {
                     Ok(message) => match message {
@@ -141,7 +141,7 @@ impl Endpoints {
                         }
                     },
                     Err(RecvError::Closed) => {
-                        tracing::error!("All senders dropped for handler endpoint: {}: {:?}", key2);
+                        tracing::error!("All senders dropped for handler endpoint: {}", key2);
                         break 'out;
                     }
                     Err(RecvError::Lagged(how_much)) => {
