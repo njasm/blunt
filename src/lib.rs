@@ -22,9 +22,10 @@ use uuid::Uuid;
 pub mod builder;
 pub mod endpoints;
 pub mod websocket;
-
+pub mod webhandler;
 pub use async_trait::async_trait;
 pub use async_tungstenite::tungstenite::protocol::{frame::coding::CloseCode, CloseFrame};
+use hyper::{Request, Body, Response};
 
 /// Our WebSocket Session Collection
 pub type WebSocketSessions = Arc<RwLock<HashMap<Uuid, WebSocketSession>>>;
@@ -63,6 +64,14 @@ impl Server {
         websocket::register_send_to_ws_message_handling(ws_session_tx, rx).await;
 
         self.add_session(session).await;
+    }
+
+    #[tracing::instrument(level = "trace", skip(self, request))]
+    async fn handle_web_request(
+        &mut self,
+        request: Arc<Request<Body>>,
+    ) -> Arc<hyper::Result<Response<Body>>> {
+        self.endpoints.handle_web_request(request).await
     }
 
     pub async fn bind(self, addrs: SocketAddr) -> hyper::Result<()> {
