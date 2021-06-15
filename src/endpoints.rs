@@ -160,11 +160,9 @@ impl Endpoints {
             .get(request.uri().path())
             .and_then(|tx| {
                 let (inner_tx, rx) = channel::<Arc<Result<Response<Body>>>>(1);
-                match tx.send(Dispatch::Web((request.clone(), inner_tx))) {
+                match tx.send(Dispatch::Web((request, inner_tx))) {
                     Ok(_t) => (),
-                    Err(e) => {
-                        tracing::error!("{:?}", e);
-                    }
+                    Err(e) => tracing::error!("{:?}", e)
                 };
 
                Some(rx)

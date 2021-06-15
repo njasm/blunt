@@ -131,6 +131,13 @@ impl Service<Request<Body>> for Router {
                     let (tx, mut rx) = channel(8);
                     if let Err(_e) = self.tx.send(Connection::Metrics(WebConnWrapper::new(req, tx))) {
                         tracing::error!("Unable to send web Connection to engine");
+                        return Box::pin(async {
+                            Ok(Response::builder()
+                                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                .body(Body::empty())
+                                .unwrap()
+                            )
+                        });
                     }
 
                     Box::pin(async move {
@@ -141,7 +148,10 @@ impl Service<Request<Body>> for Router {
                             },
                             Err(e) => {
                                 tracing::error!("Error ForPath::Web responding: {:?}", e);
-                                panic!("Ups")
+                                Response::builder()
+                                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                    .body(Body::empty())
+                                    .unwrap()
                             }
                         };
 
@@ -150,40 +160,6 @@ impl Service<Request<Body>> for Router {
                 }
             }
         };
-
-        // check here if we have any of this endpoints registered
-        // if !self.paths.iter().any(|p| (p.0) == req.uri().path()) {
-        //     tracing::warn!("Not found path: {}", req.uri().path());
-        //     let mut res = Response::new(Body::empty());
-        //     *res.status_mut() = StatusCode::NOT_FOUND;
-        //     return Box::pin(async { Ok(res) });
-        // }
-
-        // Everything is ready for ws upgrade //
-
-        // convert to tungstenite request
-        // let (parts, _) = req.into_parts();
-        // let r = TungsteniteRequest::from_parts(parts, ());
-        // let (parts, _) = match tungstenite_create_response(&r) {
-        //     Ok(resp) => resp.into_parts(),
-        //     Err(e) => {
-        //         tracing::error!("{:?}:{}", e, e);
-        //         return Box::pin(async {
-        //             Ok(Response::builder()
-        //                 .status(StatusCode::BAD_REQUEST)
-        //                 .body(Body::empty())
-        //                 .unwrap()
-        //             )
-        //         })
-        //     }
-        // };
-        //
-        // // convert back to hyper request
-        // let (req_parts, _) = r.into_parts();
-        // let r = Request::from_parts(req_parts, Body::empty());
-        // self.upgrade(r);
-        //
-        // Box::pin(async { Ok(Response::from_parts(parts, Body::empty())) })
     }
 }
 
@@ -228,14 +204,12 @@ impl Service<&AddrStream> for HttpService {
                     Ok(Connection::Metrics(wrapper)) => {
                         let (request, channel) = wrapper.into_parts();
                         let result = engine.handle_web_request(std::sync::Arc::new(request)).await;
-                        match channel.send(result) {
-                            Ok(_size) => (),
-                            Err(e) => {
-                                tracing::error!("Send Error!");
-                            }
+                        if let Err(_) = channel.send(result) {
+                            tracing::error!("Send Error!")
                         }
                     }
                     Err(e) => {
+                        //TODO: either we Lagged or the Channel is closed. is not necessarily an error
                         tracing::error!("Error Receiving from Router: {:?}", e);
                         break 'out;
                     },
