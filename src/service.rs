@@ -14,13 +14,13 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::net::TcpStream;
 
-use tokio::sync::broadcast::{channel, Sender};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use std::collections::HashMap;
 use crate::endpoints::ForPath;
 use std::sync::Arc;
 
 pub(crate) struct Router {
-    tx: Sender<Connection>,
+    tx: UnboundedSender<RequestType>,
     paths: HashMap<&'static str, ForPath>,
 }
 
@@ -38,19 +38,9 @@ impl Router {
 
                     let adapter = TokioAdapter::new(tcp_stream);
                     let ws = WebSocketStream::from_raw_socket(adapter, Role::Server, None).await;
-                    let query = match req.uri().query() {
-                        Some(s) => s.to_string(),
-                        _ => String::with_capacity(0),
-                    };
-
-                    //TODO: grab the client addr, check X-Forwarded-For for forwarded connections through proxies
-                    let ctx = ConnectionContext::new(
-                        None,
-                        req.headers().clone(),
-                        query,
-                        req.uri().path().to_owned(),
-                    );
-                    if let Err(e) = tx.send(Connection::WebSocket(WebSocketConnWrapper::new(ws, ctx))) {
+                    let (parts, _) = req.into_parts();
+                    let ctx = ConnectionContext::from_parts(parts);
+                    if let Err(e) = tx.send(RequestType::Socket(WebSocketConnWrapper::new(ws, ctx))) {
                         tracing::error!("Unable to send upgraded Connection to engine.");
                         let frame = CloseFrame {
                             code: CloseCode::Error,
@@ -58,8 +48,8 @@ impl Router {
                         };
 
                         match e.0 {
-                            Connection::WebSocket(wrapper) => {
-                                let(mut ws, ctx) = wrapper.into_parts();
+                            RequestType::Socket(wrapper) => {
+                                let (mut ws, ctx) = wrapper.into_parts();
                                 let _ = ws.close(Some(frame)).await;
                                 drop(ctx);
                                 drop(ws);
@@ -87,9 +77,12 @@ impl Service<Request<Body>> for Router {
     fn call(&mut self, req: Request<Body>) -> Self::Future {
         // favicon.ico
         if req.uri().path() == "/favicon.ico" {
-            let mut res = Response::new(Body::empty());
-            *res.status_mut() = StatusCode::NO_CONTENT;
-            return Box::pin(async { Ok(res) });
+            return Box::pin(async {
+                Ok(Response::builder()
+                    .status(StatusCode::NO_CONTENT)
+                    .body(Body::empty())
+                    .unwrap())
+            });
         }
 
         // check here if we have any of this endpoints registered
@@ -97,9 +90,12 @@ impl Service<Request<Body>> for Router {
         return match self.paths.get(req_path) {
             None => {
                 tracing::warn!("Not found path: {}", req_path);
-                let mut res = Response::new(Body::empty());
-                *res.status_mut() = StatusCode::NOT_FOUND;
-                Box::pin(async { Ok(res) })
+                Box::pin(async {
+                    Ok(Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body(Body::empty())
+                        .unwrap())
+                })
             }
             Some(v) => match *v {
                 ForPath::Socket => {
@@ -128,8 +124,8 @@ impl Service<Request<Body>> for Router {
                     Box::pin(async { Ok(Response::from_parts(parts, Body::empty())) })
                 }
                 ForPath::Web => {
-                    let (tx, mut rx) = channel(8);
-                    if let Err(_e) = self.tx.send(Connection::Metrics(WebConnWrapper::new(req, tx))) {
+                    let (tx, mut rx) = unbounded_channel();
+                    if let Err(_e) = self.tx.send(RequestType::Web(WebConnWrapper::new(req, tx))) {
                         tracing::error!("Unable to send web Connection to engine");
                         return Box::pin(async {
                             Ok(Response::builder()
@@ -142,17 +138,14 @@ impl Service<Request<Body>> for Router {
 
                     Box::pin(async move {
                         let result = match rx.recv().await {
-                            Ok(t) => match Arc::try_unwrap(t) {
+                            Some(t) => match Arc::try_unwrap(t) {
                                 Ok(r) => r.unwrap(),
-                                _ => panic!("Ups 2")
+                                _ => unreachable!("Ups, we should have only one ref to this Arc")
                             },
-                            Err(e) => {
-                                tracing::error!("Error ForPath::Web responding: {:?}", e);
-                                Response::builder()
-                                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                                    .body(Body::empty())
-                                    .unwrap()
-                            }
+                            None => Response::builder()
+                                .status(StatusCode::NO_CONTENT)
+                                .body(Body::empty())
+                                .unwrap()
                         };
 
                         Ok(result)
@@ -191,31 +184,26 @@ impl Service<&AddrStream> for HttpService {
     }
 
     fn call(&mut self, _: &AddrStream) -> Self::Future {
-        let (tx, mut rx) = channel::<Connection>(8);
+        let (tx, mut rx) = unbounded_channel();
         let mut engine = self.engine.clone();
         let paths = engine.endpoints.get_paths();
         tokio::spawn(async move {
-            'out: loop {
+            loop {
                 match rx.recv().await {
-                    Ok(Connection::WebSocket(wrapper)) => {
+                    Some(RequestType::Socket(wrapper)) => {
                         let (ws, ctx) = wrapper.into_parts();
                         engine.handle_new_session(ws, ctx).await
-                    },
-                    Ok(Connection::Metrics(wrapper)) => {
+                    }
+                    Some(RequestType::Web(wrapper)) => {
                         let (request, channel) = wrapper.into_parts();
                         let result = engine.handle_web_request(std::sync::Arc::new(request)).await;
                         if let Err(_) = channel.send(result) {
                             tracing::error!("Send Error!")
                         }
                     }
-                    Err(e) => {
-                        //TODO: either we Lagged or the Channel is closed. is not necessarily an error
-                        tracing::error!("Error Receiving from Router: {:?}", e);
-                        break 'out;
-                    },
+                    None => return
                 };
             }
-
         });
 
         Box::pin(async move {
@@ -228,22 +216,22 @@ impl Service<&AddrStream> for HttpService {
 }
 
 #[derive(Clone)]
-enum Connection {
-    WebSocket(WebSocketConnWrapper),
-    Metrics(WebConnWrapper),
+enum RequestType {
+    Socket(WebSocketConnWrapper),
+    Web(WebConnWrapper),
 }
 
 #[derive(Clone)]
 struct WebSocketConnWrapper {
     ws: Arc<WebSocketStream<TokioAdapter<TcpStream>>>,
-    ctx: ConnectionContext
+    ctx: ConnectionContext,
 }
 
 impl WebSocketConnWrapper {
     fn new(ws: WebSocketStream<TokioAdapter<TcpStream>>, ctx: ConnectionContext) -> Self {
         Self {
             ws: Arc::new(ws),
-            ctx
+            ctx,
         }
     }
 
@@ -256,15 +244,15 @@ impl WebSocketConnWrapper {
 #[derive(Clone)]
 struct WebConnWrapper {
     request: Arc<Request<Body>>,
-    channel: Sender<Arc<hyper::Result<Response<Body>>>>
+    channel: UnboundedSender<Arc<hyper::Result<Response<Body>>>>,
 }
 
 impl WebConnWrapper {
-    fn new(request: Request<Body>, channel: Sender<Arc<hyper::Result<Response<Body>>>>) -> Self {
+    fn new(request: Request<Body>, channel: UnboundedSender<Arc<hyper::Result<Response<Body>>>>) -> Self {
         Self { request: Arc::new(request), channel }
     }
 
-    fn into_parts(self) -> (Request<Body>, Sender<Arc<hyper::Result<Response<Body>>>>) {
+    fn into_parts(self) -> (Request<Body>, UnboundedSender<Arc<hyper::Result<Response<Body>>>>) {
         let request = Arc::try_unwrap(self.request).unwrap();
         (request, self.channel)
     }
