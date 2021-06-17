@@ -14,10 +14,10 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::net::TcpStream;
 
-use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
-use std::collections::HashMap;
 use crate::endpoints::ForPath;
+use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 pub(crate) struct Router {
     tx: UnboundedSender<RequestType>,
@@ -40,7 +40,8 @@ impl Router {
                     let ws = WebSocketStream::from_raw_socket(adapter, Role::Server, None).await;
                     let (parts, _) = req.into_parts();
                     let ctx = ConnectionContext::from_parts(parts);
-                    if let Err(e) = tx.send(RequestType::Socket(WebSocketConnWrapper::new(ws, ctx))) {
+                    if let Err(e) = tx.send(RequestType::Socket(WebSocketConnWrapper::new(ws, ctx)))
+                    {
                         tracing::error!("Unable to send upgraded Connection to engine.");
                         let frame = CloseFrame {
                             code: CloseCode::Error,
@@ -68,7 +69,7 @@ impl Service<Request<Body>> for Router {
     type Response = Response<Body>;
     type Error = hyper::Error;
     #[allow(clippy::type_complexity)]
-    type Future = Pin<Box<dyn Future<Output=Result<Self::Response, Self::Error>> + Send>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
     fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
@@ -110,8 +111,7 @@ impl Service<Request<Body>> for Router {
                                 Ok(Response::builder()
                                     .status(StatusCode::BAD_REQUEST)
                                     .body(Body::empty())
-                                    .unwrap()
-                                )
+                                    .unwrap())
                             });
                         }
                     };
@@ -131,8 +131,7 @@ impl Service<Request<Body>> for Router {
                             Ok(Response::builder()
                                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                                 .body(Body::empty())
-                                .unwrap()
-                            )
+                                .unwrap())
                         });
                     }
 
@@ -140,18 +139,18 @@ impl Service<Request<Body>> for Router {
                         let result = match rx.recv().await {
                             Some(t) => match Arc::try_unwrap(t) {
                                 Ok(r) => r.unwrap(),
-                                _ => unreachable!("Ups, we should have only one ref to this Arc")
+                                _ => unreachable!("Ups, we should have only one ref to this Arc"),
                             },
                             None => Response::builder()
                                 .status(StatusCode::NO_CONTENT)
                                 .body(Body::empty())
-                                .unwrap()
+                                .unwrap(),
                         };
 
                         Ok(result)
                     })
                 }
-            }
+            },
         };
     }
 }
@@ -177,7 +176,7 @@ impl Service<&AddrStream> for HttpService {
     type Response = Router;
     type Error = hyper::Error;
     #[allow(clippy::type_complexity)]
-    type Future = Pin<Box<dyn Future<Output=Result<Self::Response, Self::Error>> + Send>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
     fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
@@ -196,22 +195,17 @@ impl Service<&AddrStream> for HttpService {
                     }
                     Some(RequestType::Web(wrapper)) => {
                         let (request, channel) = wrapper.into_parts();
-                        let result = engine.handle_web_request(std::sync::Arc::new(request)).await;
-                        if let Err(_) = channel.send(result) {
+                        let result = engine.handle_web_request(request).await;
+                        if channel.send(result).is_err() {
                             tracing::error!("Send Error!")
                         }
                     }
-                    None => return
+                    None => return,
                 };
             }
         });
 
-        Box::pin(async move {
-            Ok(Router {
-                tx,
-                paths,
-            })
-        })
+        Box::pin(async move { Ok(Router { tx, paths }) })
     }
 }
 
@@ -241,18 +235,23 @@ impl WebSocketConnWrapper {
     }
 }
 
-#[derive(Clone)]
-struct WebConnWrapper {
+#[derive(Clone, Debug)]
+pub(crate) struct WebConnWrapper {
     request: Arc<Request<Body>>,
     channel: UnboundedSender<Arc<hyper::Result<Response<Body>>>>,
 }
 
+type WebConnUnboundedSender = UnboundedSender<Arc<hyper::Result<Response<Body>>>>;
+
 impl WebConnWrapper {
-    fn new(request: Request<Body>, channel: UnboundedSender<Arc<hyper::Result<Response<Body>>>>) -> Self {
-        Self { request: Arc::new(request), channel }
+    pub(crate) fn new(request: Request<Body>, channel: WebConnUnboundedSender) -> Self {
+        Self {
+            request: Arc::new(request),
+            channel,
+        }
     }
 
-    fn into_parts(self) -> (Request<Body>, UnboundedSender<Arc<hyper::Result<Response<Body>>>>) {
+    pub(crate) fn into_parts(self) -> (Request<Body>, WebConnUnboundedSender) {
         let request = Arc::try_unwrap(self.request).unwrap();
         (request, self.channel)
     }

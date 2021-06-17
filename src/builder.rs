@@ -1,6 +1,6 @@
+use crate::webhandler::WebHandler;
 use crate::websocket::WebSocketHandler;
 use crate::{Endpoints, Server};
-use crate::webhandler::WebHandler;
 
 #[derive(Clone)]
 pub struct Builder {
@@ -25,7 +25,8 @@ impl Builder {
         path: &'static str,
         handler: impl WebSocketHandler + 'static,
     ) -> Builder {
-        self.endpoints.insert_websocket_handler(path, Box::new(handler));
+        self.endpoints
+            .insert_websocket_handler(path, Box::new(handler));
 
         Builder { ..self }
     }

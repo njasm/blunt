@@ -1,10 +1,10 @@
+use async_tungstenite::tungstenite::http::Request;
+use blunt::webhandler::WebHandler;
 use blunt::websocket::{WebSocketHandler, WebSocketMessage, WebSocketSession};
+use hyper::{Body, Response};
+use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
-use blunt::webhandler::WebHandler;
-use std::sync::Arc;
-use async_tungstenite::tungstenite::http::Request;
-use hyper::{Body, Response};
 
 #[tokio::main]
 async fn main() -> hyper::Result<()> {
@@ -61,7 +61,7 @@ pub struct HelloWorldWeb;
 
 #[blunt::async_trait]
 impl WebHandler for HelloWorldWeb {
-    async fn handle(&mut self, request: Arc<Request<Body>>) -> Arc<hyper::Result<Response<Body>>> {
+    async fn handle(&mut self, request: Request<Body>) -> Arc<hyper::Result<Response<Body>>> {
         let message = format!("Hello World from path: {}", request.uri().path());
         Arc::new(Ok(Response::new(Body::from(message))))
     }

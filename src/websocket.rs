@@ -145,7 +145,7 @@ impl ConnectionContext {
     pub(crate) fn from_parts(parts: hyper::http::request::Parts) -> Self {
         let query = match parts.uri.query() {
             Some(s) => s.to_string(),
-            _ => String::with_capacity(0)
+            _ => String::with_capacity(0),
         };
 
         ConnectionContext::new(None, parts.headers, query, parts.uri.path().to_owned())

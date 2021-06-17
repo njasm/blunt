@@ -1,14 +1,16 @@
 use crate::websocket::{WebSocketHandler, WebSocketMessage, WebSocketSession};
 
-use std::collections::HashMap;
-use tokio::sync::broadcast::{channel, Sender};
 use crate::webhandler::WebHandler;
-use hyper::{Request, Body, Result, Response};
+use hyper::{Body, Request, Response, Result};
+use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+
+use crate::service::WebConnWrapper;
 
 #[derive(Debug, Clone)]
 pub(crate) enum Dispatch {
-    Web((Arc<Request<Body>>, Sender<Arc<Result<Response<Body>>>>))
+    Web(WebConnWrapper)
 }
 
 #[derive(Debug, Clone)]
@@ -21,30 +23,27 @@ pub(crate) enum WebSocketDispatch {
 #[derive(Debug, Clone)]
 pub(crate) enum ForPath {
     Socket,
-    Web
+    Web,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct Endpoints {
-    ws_channels: HashMap<&'static str, Sender<WebSocketDispatch>>,
-    web_channels: HashMap<&'static str, Sender<Dispatch>>,
+    ws_channels: HashMap<&'static str, UnboundedSender<WebSocketDispatch>>,
+    web_channels: HashMap<&'static str, UnboundedSender<Dispatch>>,
 }
 
 impl Endpoints {
     pub(crate) fn get_paths(&self) -> HashMap<&'static str, ForPath> {
         #[allow(clippy::map_clone)]
         //self.ws_channels.keys().clone().map(|k| *k).collect()
-
         let mut result = HashMap::with_capacity(self.ws_channels.len() + self.web_channels.len());
-        self.ws_channels.iter()
-            .for_each(|(k, _v)| {
-                let _ = result.insert((*k).clone(), ForPath::Socket);
-            });
+        self.ws_channels.iter().for_each(|(k, _v)| {
+            let _ = result.insert(<&str>::clone(k), ForPath::Socket);
+        });
 
-        self.web_channels.iter()
-            .for_each(|(k, _v)| {
-                let _ = result.insert((*k).clone(), ForPath::Web);
-            });
+        self.web_channels.iter().for_each(|(k, _v)| {
+            let _ = result.insert(<&str>::clone(k), ForPath::Web);
+        });
 
         result
     }
@@ -59,19 +58,23 @@ impl Endpoints {
         key: &'static str,
         mut handler: Box<impl WebSocketHandler + 'static>,
     ) {
-        let (tx, mut rx) = channel::<WebSocketDispatch>(128);
-        let key2 = key.to_string();
+        let (tx, mut rx) = unbounded_channel::<WebSocketDispatch>();
+        let key2 = key.clone();
         self.ws_channels.insert(key, tx);
 
         let f = async move {
             loop {
                 match rx.recv().await {
-                    Ok(message) => match message {
+                    Some(message) => match message {
                         WebSocketDispatch::Open(session) => handler.on_open(&session).await,
-                        WebSocketDispatch::Message(session, msg) => handler.on_message(&session, msg).await,
-                        WebSocketDispatch::Close(session, msg) => handler.on_close(&session, msg).await,
+                        WebSocketDispatch::Message(session, msg) => {
+                            handler.on_message(&session, msg).await
+                        }
+                        WebSocketDispatch::Close(session, msg) => {
+                            handler.on_close(&session, msg).await
+                        }
                     },
-                    Err(e) => tracing::error!("handler endpoint: {}: {:?}", key2, e),
+                    None => tracing::error!("handler endpoint: {}", key2),
                 }
             }
         };
@@ -83,13 +86,15 @@ impl Endpoints {
     pub(crate) async fn on_open(&self, session: &WebSocketSession) {
         self.ws_channels
             .get(session.context().path().as_str())
-            .and_then(|tx| match tx.send(WebSocketDispatch::Open(session.clone())) {
-                Ok(t) => Some(t),
-                Err(e) => {
-                    tracing::error!("{:?}", e);
-                    None
-                }
-            });
+            .and_then(
+                |tx| match tx.send(WebSocketDispatch::Open(session.clone())) {
+                    Ok(t) => Some(t),
+                    Err(e) => {
+                        tracing::error!("{:?}", e);
+                        None
+                    }
+                },
+            );
     }
 
     #[tracing::instrument(level = "trace")]
@@ -111,13 +116,15 @@ impl Endpoints {
     pub(crate) async fn on_close(&self, session: &WebSocketSession, msg: WebSocketMessage) {
         self.ws_channels
             .get(session.context().path().as_str())
-            .and_then(|tx| match tx.send(WebSocketDispatch::Close(session.clone(), msg)) {
-                Ok(t) => Some(t),
-                Err(e) => {
-                    tracing::error!("{:?}", e);
-                    None
-                }
-            });
+            .and_then(
+                |tx| match tx.send(WebSocketDispatch::Close(session.clone(), msg)) {
+                    Ok(t) => Some(t),
+                    Err(e) => {
+                        tracing::error!("{:?}", e);
+                        None
+                    }
+                },
+            );
     }
 
     pub(crate) fn insert_web_handler(
@@ -125,58 +132,53 @@ impl Endpoints {
         key: &'static str,
         mut handler: Box<impl WebHandler + 'static>,
     ) {
-        let (tx, mut rx) = channel::<Dispatch>(123);
-        let key2 = key.to_string();
+        let (tx, mut rx) = unbounded_channel::<Dispatch>();
+        let key2 = key.clone();
         self.web_channels.insert(key, tx);
 
-        let f = async move {
-            use tokio::sync::broadcast::error::RecvError;
-            'out: loop {
+        tokio::spawn(async move {
+            loop {
                 match rx.recv().await {
-                    Ok(message) => match message {
-                        Dispatch::Web((request, resp_channel)) => {
-                            if let Err(_) = resp_channel.send(handler.handle(request).await) {
-                                tracing::error!("Unable to dispatch Web request response from handler");
+                    Some(message) => match message {
+                        Dispatch::Web(wrapper) => {
+                            let (request, resp_channel) = wrapper.into_parts();
+                            if resp_channel.send(handler.handle(request).await).is_err() {
+                                tracing::error!(
+                                    "Unable to dispatch Web request response from handler"
+                                );
                             }
                         }
                     },
-                    Err(RecvError::Closed) => {
+                    None => {
                         tracing::error!("All senders dropped for handler endpoint: {}", key2);
-                        break 'out;
+                        return;
                     }
-                    Err(RecvError::Lagged(how_much)) => {
-                        tracing::error!("Receiver Lagged {} messages for handler endpoint: {}", how_much, key2);
-                        break 'out;
-                    },
                 }
             }
-        };
-
-        tokio::spawn(f);
+        });
     }
 
-    pub(crate) async fn handle_web_request(&mut self, request: Arc<Request<Body>>) -> Arc<Result<Response<Body>>> {
-        let result = self.web_channels
-            .get(request.uri().path())
-            .and_then(|tx| {
-                let (inner_tx, rx) = channel::<Arc<Result<Response<Body>>>>(1);
-                match tx.send(Dispatch::Web((request, inner_tx))) {
-                    Ok(_t) => (),
-                    Err(e) => tracing::error!("{:?}", e)
-                };
+    pub(crate) async fn handle_web_request(
+        &mut self,
+        request: Request<Body>,
+    ) -> Arc<Result<Response<Body>>> {
+        let result = self.web_channels.get(request.uri().path()).map(|tx| {
+            let (inner_tx, rx) = unbounded_channel::<Arc<Result<Response<Body>>>>();
+            let wrapper = WebConnWrapper::new(request, inner_tx);
+            match tx.send(Dispatch::Web(wrapper)) {
+                Ok(_t) => (),
+                Err(e) => tracing::error!("{:?}", e),
+            };
 
-               Some(rx)
-            });
+            rx
+        });
 
         match result {
             Some(mut r) => match r.recv().await {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::error!("Unable to receive web handler response: {:?}", e);
-                    panic!("Ups 5")
-                }
+                Some(t) => t,
+                None => unreachable!("Ups, we should not get here. tx dropped already"),
             },
-            None => panic!("Ups 4")
+            None => unreachable!("Ups, we should not get here. there's no tx channel"),
         }
     }
 }
