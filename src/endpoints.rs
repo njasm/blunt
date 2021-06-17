@@ -5,6 +5,7 @@ use hyper::{Body, Request, Response, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+use tracing::error;
 
 use crate::service::WebConnWrapper;
 
@@ -35,8 +36,8 @@ pub(crate) struct Endpoints {
 impl Endpoints {
     pub(crate) fn get_paths(&self) -> HashMap<&'static str, ForPath> {
         #[allow(clippy::map_clone)]
-        //self.ws_channels.keys().clone().map(|k| *k).collect()
-        let mut result = HashMap::with_capacity(self.ws_channels.len() + self.web_channels.len());
+            //self.ws_channels.keys().clone().map(|k| *k).collect()
+            let mut result = HashMap::with_capacity(self.ws_channels.len() + self.web_channels.len());
         self.ws_channels.iter().for_each(|(k, _v)| {
             let _ = result.insert(<&str>::clone(k), ForPath::Socket);
         });
@@ -74,7 +75,7 @@ impl Endpoints {
                             handler.on_close(&session, msg).await
                         }
                     },
-                    None => tracing::error!("handler endpoint: {}", key2),
+                    None => error!("handler endpoint: {}", key2),
                 }
             }
         };
@@ -90,7 +91,7 @@ impl Endpoints {
                 |tx| match tx.send(WebSocketDispatch::Open(session.clone())) {
                     Ok(t) => Some(t),
                     Err(e) => {
-                        tracing::error!("{:?}", e);
+                        error!("{:?}", e);
                         None
                     }
                 },
@@ -105,7 +106,7 @@ impl Endpoints {
                 |tx| match tx.send(WebSocketDispatch::Message(session.clone(), msg)) {
                     Ok(t) => Some(t),
                     Err(e) => {
-                        tracing::error!("{:?}", e);
+                        error!("{:?}", e);
                         None
                     }
                 },
@@ -120,7 +121,7 @@ impl Endpoints {
                 |tx| match tx.send(WebSocketDispatch::Close(session.clone(), msg)) {
                     Ok(t) => Some(t),
                     Err(e) => {
-                        tracing::error!("{:?}", e);
+                        error!("{:?}", e);
                         None
                     }
                 },
@@ -143,14 +144,12 @@ impl Endpoints {
                         Dispatch::Web(wrapper) => {
                             let (request, resp_channel) = wrapper.into_parts();
                             if resp_channel.send(handler.handle(request).await).is_err() {
-                                tracing::error!(
-                                    "Unable to dispatch Web request response from handler"
-                                );
+                                error!("Unable to dispatch Web request response from handler");
                             }
                         }
                     },
                     None => {
-                        tracing::error!("All senders dropped for handler endpoint: {}", key2);
+                        error!("All senders dropped for handler endpoint: {}", key2);
                         return;
                     }
                 }
@@ -167,7 +166,7 @@ impl Endpoints {
             let wrapper = WebConnWrapper::new(request, inner_tx);
             match tx.send(Dispatch::Web(wrapper)) {
                 Ok(_t) => (),
-                Err(e) => tracing::error!("{:?}", e),
+                Err(e) => error!("{:?}", e),
             };
 
             rx
