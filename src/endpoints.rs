@@ -11,7 +11,7 @@ use crate::service::WebConnWrapper;
 
 #[derive(Debug, Clone)]
 pub(crate) enum Dispatch {
-    Web(WebConnWrapper)
+    Web(WebConnWrapper),
 }
 
 #[derive(Debug, Clone)]
@@ -35,9 +35,7 @@ pub(crate) struct Endpoints {
 
 impl Endpoints {
     pub(crate) fn get_paths(&self) -> HashMap<&'static str, ForPath> {
-        #[allow(clippy::map_clone)]
-            //self.ws_channels.keys().clone().map(|k| *k).collect()
-            let mut result = HashMap::with_capacity(self.ws_channels.len() + self.web_channels.len());
+        let mut result = HashMap::with_capacity(self.ws_channels.len() + self.web_channels.len());
         self.ws_channels.iter().for_each(|(k, _v)| {
             let _ = result.insert(<&str>::clone(k), ForPath::Socket);
         });
@@ -60,6 +58,7 @@ impl Endpoints {
         mut handler: Box<impl WebSocketHandler + 'static>,
     ) {
         let (tx, mut rx) = unbounded_channel::<WebSocketDispatch>();
+        #[allow(clippy::clone_double_ref)]
         let key2 = key.clone();
         self.ws_channels.insert(key, tx);
 
@@ -81,6 +80,11 @@ impl Endpoints {
         };
 
         tokio::spawn(f);
+    }
+
+    pub(crate) fn remove_ws_channel(&mut self, session: &WebSocketSession) {
+        let c = self.ws_channels.remove(session.context().path().as_str());
+        drop(c)
     }
 
     #[tracing::instrument(level = "trace")]
@@ -134,6 +138,7 @@ impl Endpoints {
         mut handler: Box<impl WebHandler + 'static>,
     ) {
         let (tx, mut rx) = unbounded_channel::<Dispatch>();
+        #[allow(clippy::clone_double_ref)]
         let key2 = key.clone();
         self.web_channels.insert(key, tx);
 

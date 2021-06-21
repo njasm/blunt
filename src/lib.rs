@@ -128,9 +128,8 @@ impl Server {
             );
 
             self.endpoints.on_close(&session, message).await;
+            self.endpoints.remove_ws_channel(&session);
             self.remove_session(session_id).await;
-
-            //self.remove_session(session_id).await;
         } else if message.is_text() || message.is_binary() {
             tracing::trace!(
                 "received message {:?} from session id: {:?}",
