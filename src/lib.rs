@@ -25,7 +25,7 @@ pub mod webhandler;
 pub mod websocket;
 pub use async_trait::async_trait;
 pub use async_tungstenite::tungstenite::protocol::{frame::coding::CloseCode, CloseFrame};
-use hyper::{Body, Request, Response};
+pub use hyper::{Body, Request, Response, Result, StatusCode};
 
 /// Our WebSocket Session Collection
 pub type WebSocketSessions = Arc<RwLock<HashMap<Uuid, WebSocketSession>>>;
