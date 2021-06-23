@@ -21,10 +21,11 @@ use uuid::Uuid;
 
 pub mod builder;
 pub mod endpoints;
+pub mod webhandler;
 pub mod websocket;
-
 pub use async_trait::async_trait;
 pub use async_tungstenite::tungstenite::protocol::{frame::coding::CloseCode, CloseFrame};
+pub use hyper::{Body, Request, Response, Result, StatusCode};
 
 /// Our WebSocket Session Collection
 pub type WebSocketSessions = Arc<RwLock<HashMap<Uuid, WebSocketSession>>>;
@@ -63,6 +64,14 @@ impl Server {
         websocket::register_send_to_ws_message_handling(ws_session_tx, rx).await;
 
         self.add_session(session).await;
+    }
+
+    #[tracing::instrument(level = "trace", skip(self, request))]
+    async fn handle_web_request(
+        &mut self,
+        request: Request<Body>,
+    ) -> Arc<hyper::Result<Response<Body>>> {
+        self.endpoints.handle_web_request(request).await
     }
 
     pub async fn bind(self, addrs: SocketAddr) -> hyper::Result<()> {
@@ -119,9 +128,8 @@ impl Server {
             );
 
             self.endpoints.on_close(&session, message).await;
+            self.endpoints.remove_ws_channel(&session);
             self.remove_session(session_id).await;
-
-            //self.remove_session(session_id).await;
         } else if message.is_text() || message.is_binary() {
             tracing::trace!(
                 "received message {:?} from session id: {:?}",

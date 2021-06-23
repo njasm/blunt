@@ -1,49 +1,80 @@
 use crate::websocket::{WebSocketHandler, WebSocketMessage, WebSocketSession};
 
+use crate::webhandler::WebHandler;
+use hyper::{Body, Request, Response, Result};
 use std::collections::HashMap;
-use tokio::sync::broadcast::{channel, Sender};
+use std::sync::Arc;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+use tracing::error;
+
+use crate::service::WebConnWrapper;
 
 #[derive(Debug, Clone)]
 pub(crate) enum Dispatch {
+    Web(WebConnWrapper),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum WebSocketDispatch {
     Open(WebSocketSession),
     Message(WebSocketSession, WebSocketMessage),
     Close(WebSocketSession, WebSocketMessage),
 }
 
 #[derive(Debug, Clone)]
+pub(crate) enum ForPath {
+    Socket,
+    Web,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct Endpoints {
-    channels: HashMap<&'static str, Sender<Dispatch>>,
+    ws_channels: HashMap<&'static str, UnboundedSender<WebSocketDispatch>>,
+    web_channels: HashMap<&'static str, UnboundedSender<Dispatch>>,
 }
 
 impl Endpoints {
-    pub(crate) fn get_paths(&self) -> Vec<&'static str> {
-        #[allow(clippy::map_clone)]
-        self.channels.keys().clone().map(|k| *k).collect()
+    pub(crate) fn get_paths(&self) -> HashMap<&'static str, ForPath> {
+        let mut result = HashMap::with_capacity(self.ws_channels.len() + self.web_channels.len());
+        self.ws_channels.iter().for_each(|(k, _v)| {
+            let _ = result.insert(<&str>::clone(k), ForPath::Socket);
+        });
+
+        self.web_channels.iter().for_each(|(k, _v)| {
+            let _ = result.insert(<&str>::clone(k), ForPath::Web);
+        });
+
+        result
     }
 
     #[tracing::instrument(level = "trace")]
     pub(crate) async fn contains_path(&self, key: &str) -> bool {
-        self.channels.contains_key(key)
+        self.ws_channels.contains_key(key)
     }
 
-    pub(crate) fn insert(
+    pub(crate) fn insert_websocket_handler(
         &mut self,
         key: &'static str,
         mut handler: Box<impl WebSocketHandler + 'static>,
     ) {
-        let (tx, mut rx) = channel::<Dispatch>(128);
-        let key2 = key.to_string();
-        self.channels.insert(key, tx);
+        let (tx, mut rx) = unbounded_channel::<WebSocketDispatch>();
+        #[allow(clippy::clone_double_ref)]
+        let key2 = key.clone();
+        self.ws_channels.insert(key, tx);
 
         let f = async move {
             loop {
                 match rx.recv().await {
-                    Ok(message) => match message {
-                        Dispatch::Open(session) => handler.on_open(&session).await,
-                        Dispatch::Message(session, msg) => handler.on_message(&session, msg).await,
-                        Dispatch::Close(session, msg) => handler.on_close(&session, msg).await,
+                    Some(message) => match message {
+                        WebSocketDispatch::Open(session) => handler.on_open(&session).await,
+                        WebSocketDispatch::Message(session, msg) => {
+                            handler.on_message(&session, msg).await
+                        }
+                        WebSocketDispatch::Close(session, msg) => {
+                            handler.on_close(&session, msg).await
+                        }
                     },
-                    Err(e) => tracing::error!("handler endpoint: {}: {:?}", key2, e),
+                    None => error!("handler endpoint: {}", key2),
                 }
             }
         };
@@ -51,28 +82,35 @@ impl Endpoints {
         tokio::spawn(f);
     }
 
+    pub(crate) fn remove_ws_channel(&mut self, session: &WebSocketSession) {
+        let c = self.ws_channels.remove(session.context().path().as_str());
+        drop(c)
+    }
+
     #[tracing::instrument(level = "trace")]
     pub(crate) async fn on_open(&self, session: &WebSocketSession) {
-        self.channels
+        self.ws_channels
             .get(session.context().path().as_str())
-            .and_then(|tx| match tx.send(Dispatch::Open(session.clone())) {
-                Ok(t) => Some(t),
-                Err(e) => {
-                    tracing::error!("{:?}", e);
-                    None
-                }
-            });
+            .and_then(
+                |tx| match tx.send(WebSocketDispatch::Open(session.clone())) {
+                    Ok(t) => Some(t),
+                    Err(e) => {
+                        error!("{:?}", e);
+                        None
+                    }
+                },
+            );
     }
 
     #[tracing::instrument(level = "trace")]
     pub(crate) async fn on_message(&self, session: &WebSocketSession, msg: WebSocketMessage) {
-        self.channels
+        self.ws_channels
             .get(session.context().path().as_str())
             .and_then(
-                |tx| match tx.send(Dispatch::Message(session.clone(), msg)) {
+                |tx| match tx.send(WebSocketDispatch::Message(session.clone(), msg)) {
                     Ok(t) => Some(t),
                     Err(e) => {
-                        tracing::error!("{:?}", e);
+                        error!("{:?}", e);
                         None
                     }
                 },
@@ -81,22 +119,79 @@ impl Endpoints {
 
     #[tracing::instrument(level = "trace")]
     pub(crate) async fn on_close(&self, session: &WebSocketSession, msg: WebSocketMessage) {
-        self.channels
+        self.ws_channels
             .get(session.context().path().as_str())
-            .and_then(|tx| match tx.send(Dispatch::Close(session.clone(), msg)) {
-                Ok(t) => Some(t),
-                Err(e) => {
-                    tracing::error!("{:?}", e);
-                    None
+            .and_then(
+                |tx| match tx.send(WebSocketDispatch::Close(session.clone(), msg)) {
+                    Ok(t) => Some(t),
+                    Err(e) => {
+                        error!("{:?}", e);
+                        None
+                    }
+                },
+            );
+    }
+
+    pub(crate) fn insert_web_handler(
+        &mut self,
+        key: &'static str,
+        mut handler: Box<impl WebHandler + 'static>,
+    ) {
+        let (tx, mut rx) = unbounded_channel::<Dispatch>();
+        #[allow(clippy::clone_double_ref)]
+        let key2 = key.clone();
+        self.web_channels.insert(key, tx);
+
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Some(message) => match message {
+                        Dispatch::Web(wrapper) => {
+                            let (request, resp_channel) = wrapper.into_parts();
+                            if resp_channel.send(handler.handle(request).await).is_err() {
+                                error!("Unable to dispatch Web request response from handler");
+                            }
+                        }
+                    },
+                    None => {
+                        error!("All senders dropped for handler endpoint: {}", key2);
+                        return;
+                    }
                 }
-            });
+            }
+        });
+    }
+
+    pub(crate) async fn handle_web_request(
+        &mut self,
+        request: Request<Body>,
+    ) -> Arc<Result<Response<Body>>> {
+        let result = self.web_channels.get(request.uri().path()).map(|tx| {
+            let (inner_tx, rx) = unbounded_channel::<Arc<Result<Response<Body>>>>();
+            let wrapper = WebConnWrapper::new(request, inner_tx);
+            match tx.send(Dispatch::Web(wrapper)) {
+                Ok(_t) => (),
+                Err(e) => error!("{:?}", e),
+            };
+
+            rx
+        });
+
+        match result {
+            Some(mut r) => match r.recv().await {
+                Some(t) => t,
+                None => unreachable!("Ups, we should not get here. tx dropped already"),
+            },
+            None => unreachable!("Ups, we should not get here. there's no tx channel"),
+        }
     }
 }
 
 impl Default for Endpoints {
     fn default() -> Self {
         Self {
-            channels: HashMap::new(),
+            ws_channels: HashMap::new(),
+            web_channels: HashMap::new(),
         }
     }
 }
@@ -123,7 +218,7 @@ mod tests {
         assert_eq!(e.contains_path(key).await, false);
 
         let h = Handler::default();
-        e.insert(key, Box::new(h));
+        e.insert_websocket_handler(key, Box::new(h));
 
         assert_eq!(e.contains_path(key).await, true);
     }

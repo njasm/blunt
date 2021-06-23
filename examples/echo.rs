@@ -1,4 +1,8 @@
+use async_tungstenite::tungstenite::http::Request;
+use blunt::webhandler::WebHandler;
 use blunt::websocket::{WebSocketHandler, WebSocketMessage, WebSocketSession};
+use hyper::{Body, Response};
+use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
@@ -18,8 +22,10 @@ async fn main() -> hyper::Result<()> {
 
     // just what's actually needed
     let handler = EchoServer::default();
+    let web = HelloWorldWeb::default();
     ::blunt::builder()
         .for_path("/echo", handler)
+        .for_web_path("/world", web)
         .build()
         .bind("127.0.0.1:3000".parse().expect("Invalid Socket Addr"))
         .await?;
@@ -47,5 +53,16 @@ impl WebSocketHandler for EchoServer {
 
     async fn on_close(&mut self, ws: &WebSocketSession, _msg: WebSocketMessage) {
         info!("connection closed for session id {}", ws.id());
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct HelloWorldWeb;
+
+#[blunt::async_trait]
+impl WebHandler for HelloWorldWeb {
+    async fn handle(&mut self, request: Request<Body>) -> Arc<hyper::Result<Response<Body>>> {
+        let message = format!("Hello World from path: {}", request.uri().path());
+        Arc::new(Ok(Response::new(Body::from(message))))
     }
 }
