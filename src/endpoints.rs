@@ -91,45 +91,24 @@ impl Endpoints {
     pub(crate) async fn on_open(&self, session: &WebSocketSession) {
         self.ws_channels
             .get(session.context().path().as_str())
-            .and_then(
-                |tx| match tx.send(WebSocketDispatch::Open(session.clone())) {
-                    Ok(t) => Some(t),
-                    Err(e) => {
-                        error!("{:?}", e);
-                        None
-                    }
-                },
-            );
+            .and_then(|tx| tx.send(WebSocketDispatch::Open(session.clone())).ok());
     }
 
     #[tracing::instrument(level = "trace")]
     pub(crate) async fn on_message(&self, session: &WebSocketSession, msg: WebSocketMessage) {
         self.ws_channels
             .get(session.context().path().as_str())
-            .and_then(
-                |tx| match tx.send(WebSocketDispatch::Message(session.clone(), msg)) {
-                    Ok(t) => Some(t),
-                    Err(e) => {
-                        error!("{:?}", e);
-                        None
-                    }
-                },
-            );
+            .and_then(|tx| {
+                tx.send(WebSocketDispatch::Message(session.clone(), msg))
+                    .ok()
+            });
     }
 
     #[tracing::instrument(level = "trace")]
     pub(crate) async fn on_close(&self, session: &WebSocketSession, msg: WebSocketMessage) {
         self.ws_channels
             .get(session.context().path().as_str())
-            .and_then(
-                |tx| match tx.send(WebSocketDispatch::Close(session.clone(), msg)) {
-                    Ok(t) => Some(t),
-                    Err(e) => {
-                        error!("{:?}", e);
-                        None
-                    }
-                },
-            );
+            .and_then(|tx| tx.send(WebSocketDispatch::Close(session.clone(), msg)).ok());
     }
 
     pub(crate) fn insert_web_handler(
