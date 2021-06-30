@@ -98,7 +98,10 @@ impl Endpoints {
     pub(crate) async fn on_message(&self, session: &WebSocketSession, msg: WebSocketMessage) {
         self.ws_channels
             .get(session.context().path().as_str())
-            .and_then(|tx| tx.send(WebSocketDispatch::Message(session.clone(), msg)).ok());
+            .and_then(|tx| {
+                tx.send(WebSocketDispatch::Message(session.clone(), msg))
+                    .ok()
+            });
     }
 
     #[tracing::instrument(level = "trace")]
