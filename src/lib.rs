@@ -68,7 +68,7 @@ impl Server {
 
     #[tracing::instrument(level = "trace", skip(self, request))]
     async fn handle_web_request(
-        &mut self,
+        &self,
         request: Request<Body>,
     ) -> Arc<hyper::Result<Response<Body>>> {
         self.endpoints.handle_web_request(request).await

@@ -23,12 +23,15 @@ type UserCollection = Arc<RwLock<HashMap<Uuid, UnboundedSender<WebSocketMessage>
 pub struct ChatServer(UserCollection);
 
 impl ChatServer {
-    async fn broadcast(&mut self, except_id: Uuid, msg: WebSocketMessage) {
-        self.0.read().await.iter().for_each(|entry| {
-            if entry.0 != &except_id {
+    async fn broadcast(&self, except_id: Uuid, msg: WebSocketMessage) {
+        self.0
+            .read()
+            .await
+            .iter()
+            .filter(|entry| entry.0 != &except_id)
+            .for_each(|entry| {
                 let _ = entry.1.send(msg.clone());
-            }
-        });
+            });
     }
 }
 

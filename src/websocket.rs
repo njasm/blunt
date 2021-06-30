@@ -168,3 +168,28 @@ impl ConnectionContext {
         self.query.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::websocket::{ConnectionContext, WebSocketMessage, WebSocketSession};
+    use hyper::HeaderMap;
+    use std::marker::{Send, Sync};
+    use tokio::sync::mpsc::unbounded_channel;
+
+    #[test]
+    fn web_socket_session_is_sync_and_send() {
+        let (tx, _) = unbounded_channel::<WebSocketMessage>();
+        let ctx = ConnectionContext::new(
+            None,
+            HeaderMap::new(),
+            String::with_capacity(0),
+            String::with_capacity(0),
+        );
+
+        let ws = WebSocketSession::new(ctx, tx);
+        test_it(&ws);
+        assert!(true);
+    }
+
+    fn test_it<T: Sync + Send>(_ws: &T) {}
+}

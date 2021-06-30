@@ -142,7 +142,7 @@ impl Endpoints {
     }
 
     pub(crate) async fn handle_web_request(
-        &mut self,
+        &self,
         request: Request<Body>,
     ) -> Arc<Result<Response<Body>>> {
         let result = self.web_channels.get(request.uri().path()).map(|tx| {
