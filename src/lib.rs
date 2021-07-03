@@ -100,17 +100,15 @@ impl Server {
     /// Removed a web socket session from the server
     #[tracing::instrument(level = "trace", skip(self))]
     async fn remove_session(&self, session_id: Uuid) {
-        let s = self.sessions.write().await.remove(session_id.borrow());
+        let s = { self.sessions.write().await.remove(session_id.borrow()) };
         drop(s);
 
-        tracing::debug!(
-            "Current total active sessions: {}",
-            self.sessions.read().await.len()
-        );
+        let len = { self.sessions.read().await.len() };
+        tracing::debug!("Current total active sessions: {}", len);
     }
 
     /// Receive message from the web socket connection
-    #[tracing::instrument(level = "trace", , skip(self, message))]
+    #[tracing::instrument(level = "trace", skip(self, message))]
     pub async fn recv(&mut self, session_id: Uuid, message: WebSocketMessage) {
         let session = {
             let lock = self.sessions.read().await;
@@ -153,4 +151,18 @@ impl Server {
 
 pub fn builder() -> Builder {
     builder::Builder::new()
+}
+
+#[cfg(test)]
+mod tests {
+    fn test_send_sync<T: Send + Sync>(_server: &T) {}
+
+    #[tokio::test]
+    async fn test_server_is_send_and_sync() {
+        let endpoints = crate::Endpoints::default();
+        let server = crate::Server::new(endpoints);
+
+        test_send_sync(&server);
+        assert!(true);
+    }
 }
