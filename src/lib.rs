@@ -153,7 +153,6 @@ pub fn builder() -> Builder {
     builder::Builder::new()
 }
 
-
 #[cfg(test)]
 mod tests {
     fn test_send_sync<T: Send + Sync>(_server: &T) {}
