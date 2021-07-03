@@ -156,14 +156,14 @@ pub fn builder() -> Builder {
 
 #[cfg(test)]
 mod tests {
-    fn test_send_sync<T: Send + Sync>(server: T) {}
+    fn test_send_sync<T: Send + Sync>(_server: &T) {}
 
     #[tokio::test]
     async fn test_server_is_send_and_sync() {
         let endpoints = crate::Endpoints::default();
         let server = crate::Server::new(endpoints);
 
-        test_send_sync(server);
+        test_send_sync(&server);
         assert!(true);
     }
 }
