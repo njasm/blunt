@@ -30,8 +30,7 @@ fn start_echo_server() -> JoinHandle<()> {
 
 fn single_server_send_only_iter_custom() -> impl FnMut(u64) -> Duration {
     |iters| {
-        let (mut socket, _response) = connect("ws://localhost:9999/echo")
-            .expect("Can't connect");
+        let (mut socket, _response) = connect("ws://localhost:9999/echo").expect("Can't connect");
         let ws_message = Message::Text(String::from("Hello World!"));
         let start = Instant::now();
         for _n in 0..iters {
@@ -47,8 +46,7 @@ fn single_server_send_only_iter_custom() -> impl FnMut(u64) -> Duration {
 fn single_server_send_recv_iter_custom() -> impl FnMut(u64) -> Duration {
     |iters| {
         let ws_message = Message::Text(String::from("Hello World!"));
-        let (mut socket, _response) = connect("ws://localhost:9999/echo")
-            .expect("Can't connect");
+        let (mut socket, _response) = connect("ws://localhost:9999/echo").expect("Can't connect");
 
         let start = Instant::now();
         for _n in 0..iters {
@@ -59,7 +57,6 @@ fn single_server_send_recv_iter_custom() -> impl FnMut(u64) -> Duration {
         start.elapsed()
     }
 }
-
 
 enum ServerType {
     SingleServer,
@@ -73,7 +70,7 @@ fn start_tokio_rt(typ: ServerType) -> tokio::sync::mpsc::UnboundedSender<bool> {
         rt.block_on(async {
             let _server_handle = match typ {
                 ServerType::SingleServer => start_echo_server(),
-                ServerType::MultiServer => start_multi_echo_server()
+                ServerType::MultiServer => start_multi_echo_server(),
             };
 
             let _ = rx.recv().await;
