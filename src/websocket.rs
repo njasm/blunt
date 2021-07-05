@@ -19,7 +19,57 @@ use tracing::{error, trace, trace_span, warn};
 use tracing_futures::Instrument;
 use uuid::Uuid;
 
+#[tracing::instrument(level = "trace", skip(server, ws_session_rx, session_id, ws_session_tx, rx))]
+pub(crate) async fn mediator(
+    mut server: Server,
+    mut ws_session_rx: SplitStream<WebSocketStream<TokioAdapter<TcpStream>>>,
+    session_id: impl Into<Uuid>,
+    mut ws_session_tx: SplitSink<WebSocketStream<TokioAdapter<TcpStream>>, WebSocketMessage>,
+    mut rx: UnboundedReceiver<WebSocketMessage>,
+) {
+    let session_id = session_id.into();
+    tokio::spawn(
+        async move {
+            loop {
+                tokio::select! {
+                    Some(result) = rx.recv() => {
+                        { trace!("Sending to websocket: {:?}", result); }
+                        if let Err(e) = ws_session_tx.send(result).await {
+                            error!("Sending to websocket: {:?}", e);
+                            warn!("Dropping channel server -> 'ws_session_rx'");
+                            return;
+                        }
+                    },
+                    Some(result) = ws_session_rx.next() => {
+                        match result {
+                            Ok(msg) => server.recv(session_id, msg).await,
+                            Err(e) => {
+                                let error_message = {
+                                    let m = format!("Receive from websocket: {:?}", e);
+                                    error!("{}", m);
+                                    m
+                                };
+
+                                let frame = CloseFrame {
+                                    code: CloseCode::Abnormal,
+                                    reason: std::borrow::Cow::Owned(error_message),
+                                };
+
+                                { warn!("Dropping channel 'ws_session_rx' -> server::recv()"); }
+                                server.recv(session_id, Message::Close(Some(frame))).await;
+                                return;
+                            }
+                        };
+                    },
+                    else => break,
+                }
+            }
+        }
+    );
+}
+
 /// Async task to receive messages from the web socket connection
+#[allow(dead_code)]
 pub(crate) async fn register_recv_ws_message_handling(
     mut server: Server,
     mut ws_session_rx: SplitStream<WebSocketStream<TokioAdapter<TcpStream>>>,
@@ -54,6 +104,7 @@ pub(crate) async fn register_recv_ws_message_handling(
 }
 
 /// Async task to send messages to the web socket connection
+#[allow(dead_code)]
 pub(crate) async fn register_send_to_ws_message_handling(
     mut ws_session_tx: SplitSink<WebSocketStream<TokioAdapter<TcpStream>>, WebSocketMessage>,
     mut rx: UnboundedReceiver<WebSocketMessage>,
@@ -69,7 +120,7 @@ pub(crate) async fn register_send_to_ws_message_handling(
                 }
             }
         }
-        .instrument(trace_span!("send_to_ws_task")),
+            .instrument(trace_span!("send_to_ws_task")),
     );
 }
 
