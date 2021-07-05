@@ -58,17 +58,18 @@ impl Server {
 
         // async task to receive messages from the web socket connection
         let ws_server2 = self.clone();
-        websocket::register_recv_ws_message_handling(ws_server2, ws_session_rx, session_id).await;
+        websocket::mediator(ws_server2, ws_session_rx, session_id, ws_session_tx, rx).await;
+        //websocket::register_recv_ws_message_handling(ws_server2, ws_session_rx, session_id).await;
 
         // async task to send messages to the web socket connection
-        websocket::register_send_to_ws_message_handling(ws_session_tx, rx).await;
+        //websocket::register_send_to_ws_message_handling(ws_session_tx, rx).await;
 
         self.add_session(session).await;
     }
 
     #[tracing::instrument(level = "trace", skip(self, request))]
     async fn handle_web_request(
-        &mut self,
+        &self,
         request: Request<Body>,
     ) -> Arc<hyper::Result<Response<Body>>> {
         self.endpoints.handle_web_request(request).await
@@ -100,10 +101,12 @@ impl Server {
     /// Removed a web socket session from the server
     #[tracing::instrument(level = "trace", skip(self))]
     async fn remove_session(&self, session_id: Uuid) {
-        let s = { self.sessions.write().await.remove(session_id.borrow()) };
-        drop(s);
+        let (s, len) = {
+            let mut guard = self.sessions.write().await;
+            (guard.remove(session_id.borrow()), guard.len())
+        };
 
-        let len = { self.sessions.read().await.len() };
+        drop(s);
         tracing::debug!("Current total active sessions: {}", len);
     }
 
