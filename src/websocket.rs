@@ -63,7 +63,7 @@ pub(crate) async fn register_send_to_ws_message_handling(
             while let Some(result) = rx.recv().await {
                 trace!("Sending to websocket: {:?}", result);
                 if let Err(e) = ws_session_tx.send(result).await {
-                    error!("Sending to websocket: {:?}", e);
+                    warn!("Sending to websocket: {:?}", e);
                     warn!("Dropping channel server -> 'ws_session_rx'");
                     return;
                 }

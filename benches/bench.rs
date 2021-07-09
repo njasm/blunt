@@ -10,7 +10,10 @@ pub struct EchoServer;
 impl WebSocketHandler for EchoServer {
     async fn on_open(&mut self, _ws: &WebSocketSession) {}
     async fn on_message(&mut self, ws: &WebSocketSession, msg: WebSocketMessage) {
-        ws.send(msg).expect("Unable to send message");
+        match ws.send(msg) {
+            Ok(_) => (),
+            Err(e) => eprintln!("Unable to send: {:?}", e)
+        };
     }
 
     async fn on_close(&mut self, _ws: &WebSocketSession, _msg: WebSocketMessage) {}
