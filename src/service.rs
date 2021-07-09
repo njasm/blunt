@@ -157,13 +157,16 @@ impl Service<Request<Body>> for Router {
 
 pub(crate) struct HttpService {
     engine: crate::Server,
-    registered_paths: HashMap<&'static str, ForPath>
+    registered_paths: HashMap<&'static str, ForPath>,
 }
 
 impl HttpService {
     pub(crate) fn new(engine: crate::Server) -> Self {
         let paths = engine.endpoints.get_paths();
-        Self { engine, registered_paths: paths }
+        Self {
+            engine,
+            registered_paths: paths,
+        }
     }
 
     pub(crate) async fn serve(self, addrs: SocketAddr) -> Server<AddrIncoming, HttpService> {

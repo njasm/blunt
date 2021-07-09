@@ -12,7 +12,7 @@ impl WebSocketHandler for EchoServer {
     async fn on_message(&mut self, ws: &WebSocketSession, msg: WebSocketMessage) {
         match ws.send(msg) {
             Ok(_) => (),
-            Err(e) => eprintln!("Unable to send: {:?}", e)
+            Err(e) => eprintln!("Unable to send: {:?}", e),
         };
     }
 

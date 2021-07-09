@@ -66,9 +66,7 @@ impl Endpoints {
                     WebSocketDispatch::Message(session, msg) => {
                         handler.on_message(&session, msg).await
                     }
-                    WebSocketDispatch::Close(session, msg) => {
-                        handler.on_close(&session, msg).await
-                    }
+                    WebSocketDispatch::Close(session, msg) => handler.on_close(&session, msg).await,
                 };
             }
         });
@@ -128,18 +126,16 @@ impl Endpoints {
         &self,
         request: Request<Body>,
     ) -> Arc<Result<Response<Body>>> {
-        let result = self.web_channels
-            .get(request.uri().path())
-            .map(|tx| {
-                let (inner_tx, rx) = unbounded_channel::<Arc<Result<Response<Body>>>>();
-                let wrapper = WebConnWrapper::new(request, inner_tx);
-                match tx.send(Dispatch::Web(wrapper)) {
-                    Ok(_t) => (),
-                    Err(e) => error!("{:?}", e),
-                };
+        let result = self.web_channels.get(request.uri().path()).map(|tx| {
+            let (inner_tx, rx) = unbounded_channel::<Arc<Result<Response<Body>>>>();
+            let wrapper = WebConnWrapper::new(request, inner_tx);
+            match tx.send(Dispatch::Web(wrapper)) {
+                Ok(_t) => (),
+                Err(e) => error!("{:?}", e),
+            };
 
-                rx
-            });
+            rx
+        });
 
         match result {
             Some(mut r) => match r.recv().await {

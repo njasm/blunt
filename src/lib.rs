@@ -4,14 +4,14 @@ use crate::builder::Builder;
 use crate::endpoints::Endpoints;
 use crate::websocket::{ConnectionContext, WebSocketMessage, WebSocketSession};
 
-use std::collections::HashMap;
 use async_tungstenite::{tokio::TokioAdapter, WebSocketStream};
 use futures::StreamExt;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpStream;
-use tokio::sync::oneshot::{Sender, channel};
 use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::oneshot::{channel, Sender};
 use uuid::Uuid;
 
 pub mod builder;
@@ -22,7 +22,6 @@ pub mod websocket;
 pub use async_trait::async_trait;
 pub use async_tungstenite::tungstenite::protocol::{frame::coding::CloseCode, CloseFrame};
 pub use hyper::{Body, Request, Response, Result, StatusCode};
-
 
 #[derive(Clone, Debug)]
 pub struct Server {
@@ -129,21 +128,33 @@ impl Server {
     /// Removed a web socket session from the server
     #[tracing::instrument(level = "trace", skip(self))]
     async fn remove_session(&self, session_id: Uuid) {
-        let _ = self.sessions_tx.send(SessionMessage::Remove(session_id, None));
+        let _ = self
+            .sessions_tx
+            .send(SessionMessage::Remove(session_id, None));
     }
 
     /// Receive message from the web socket connection
     #[tracing::instrument(level = "trace", skip(self, message))]
     pub async fn recv(&mut self, session_id: Uuid, message: WebSocketMessage) {
         let (tx, rx) = channel();
-        if self.sessions_tx.send(SessionMessage::Get(session_id, Some(tx))).is_err() {
+        if self
+            .sessions_tx
+            .send(SessionMessage::Get(session_id, Some(tx)))
+            .is_err()
+        {
             tracing::error!("Unable to request WebSocketSession from task");
             return;
         }
 
         let session = match rx.await {
-            Ok(s) => if let Some(s) = s { s } else { return; },
-            Err(_) => return
+            Ok(s) => {
+                if let Some(s) = s {
+                    s
+                } else {
+                    return;
+                }
+            }
+            Err(_) => return,
         };
 
         if message.is_close() {
