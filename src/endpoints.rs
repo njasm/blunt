@@ -58,28 +58,18 @@ impl Endpoints {
         mut handler: Box<impl WebSocketHandler + 'static>,
     ) {
         let (tx, mut rx) = unbounded_channel::<WebSocketDispatch>();
-        #[allow(clippy::clone_double_ref)]
-        let key2 = key.clone();
         self.ws_channels.insert(key, tx);
-
-        let f = async move {
-            loop {
-                match rx.recv().await {
-                    Some(message) => match message {
-                        WebSocketDispatch::Open(session) => handler.on_open(&session).await,
-                        WebSocketDispatch::Message(session, msg) => {
-                            handler.on_message(&session, msg).await
-                        }
-                        WebSocketDispatch::Close(session, msg) => {
-                            handler.on_close(&session, msg).await
-                        }
-                    },
-                    None => error!("handler endpoint: {}", key2),
-                }
+        tokio::spawn(async move {
+            while let Some(message) = rx.recv().await {
+                match message {
+                    WebSocketDispatch::Open(session) => handler.on_open(&session).await,
+                    WebSocketDispatch::Message(session, msg) => {
+                        handler.on_message(&session, msg).await
+                    }
+                    WebSocketDispatch::Close(session, msg) => handler.on_close(&session, msg).await,
+                };
             }
-        };
-
-        tokio::spawn(f);
+        });
     }
 
     pub(crate) fn remove_ws_channel(&mut self, session: &WebSocketSession) {
@@ -117,32 +107,23 @@ impl Endpoints {
         mut handler: Box<impl WebHandler + 'static>,
     ) {
         let (tx, mut rx) = unbounded_channel::<Dispatch>();
-        #[allow(clippy::clone_double_ref)]
-        let key2 = key.clone();
         self.web_channels.insert(key, tx);
-
         tokio::spawn(async move {
-            loop {
-                match rx.recv().await {
-                    Some(message) => match message {
-                        Dispatch::Web(wrapper) => {
-                            let (request, resp_channel) = wrapper.into_parts();
-                            if resp_channel.send(handler.handle(request).await).is_err() {
-                                error!("Unable to dispatch Web request response from handler");
-                            }
+            while let Some(message) = rx.recv().await {
+                match message {
+                    Dispatch::Web(wrapper) => {
+                        let (request, resp_channel) = wrapper.into_parts();
+                        if resp_channel.send(handler.handle(request).await).is_err() {
+                            error!("Unable to dispatch Web request response from handler");
                         }
-                    },
-                    None => {
-                        error!("All senders dropped for handler endpoint: {}", key2);
-                        return;
                     }
-                }
+                };
             }
         });
     }
 
     pub(crate) async fn handle_web_request(
-        &mut self,
+        &self,
         request: Request<Body>,
     ) -> Arc<Result<Response<Body>>> {
         let result = self.web_channels.get(request.uri().path()).map(|tx| {
@@ -179,7 +160,7 @@ impl Default for Endpoints {
 mod tests {
     use crate::websocket::{WebSocketHandler, WebSocketMessage, WebSocketSession};
 
-    #[derive(Debug, Default)]
+    #[derive(Debug, Default, Clone)]
     struct Handler;
 
     #[crate::async_trait]

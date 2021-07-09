@@ -4,55 +4,89 @@ use crate::builder::Builder;
 use crate::endpoints::Endpoints;
 use crate::websocket::{ConnectionContext, WebSocketMessage, WebSocketSession};
 
-use std::collections::HashMap;
-
 use async_tungstenite::{tokio::TokioAdapter, WebSocketStream};
-
 use futures::StreamExt;
-use std::borrow::Borrow;
-
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, RwLock};
-
+use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::oneshot::{channel, Sender};
 use uuid::Uuid;
 
 pub mod builder;
 pub mod endpoints;
 pub mod webhandler;
 pub mod websocket;
+
 pub use async_trait::async_trait;
 pub use async_tungstenite::tungstenite::protocol::{frame::coding::CloseCode, CloseFrame};
 pub use hyper::{Body, Request, Response, Result, StatusCode};
 
-/// Our WebSocket Session Collection
-pub type WebSocketSessions = Arc<RwLock<HashMap<Uuid, WebSocketSession>>>;
-
 #[derive(Clone, Debug)]
 pub struct Server {
     endpoints: Endpoints,
-    pub sessions: WebSocketSessions,
+    sessions_tx: tokio::sync::mpsc::UnboundedSender<SessionMessage>,
+}
+
+/// Internal Message Type to work with the async Task
+/// responsible to handle the Web Socket Sessions Collection
+#[derive(Debug)]
+enum SessionMessage {
+    /// Add a new Web Socket Session to the Collection
+    Add(WebSocketSession),
+    /// Remove the Web Socket Session identified by the Uuid
+    Remove(Uuid, Option<Sender<Option<WebSocketSession>>>),
+    /// Returns a cloned Web Socket Session identified by the Uuid
+    Get(Uuid, Option<Sender<Option<WebSocketSession>>>),
 }
 
 impl Server {
     pub(crate) fn new(endpoints: Endpoints) -> Self {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::task::spawn(async move {
+            let mut sessions = HashMap::new();
+            while let Some(data) = rx.recv().await {
+                match data {
+                    SessionMessage::Add(ws) => {
+                        let _ = sessions.insert(ws.id(), ws);
+                        tracing::trace!("total sessions: {}", sessions.len());
+                    }
+                    SessionMessage::Get(id, reply) => {
+                        if let Some(s) = sessions.get(&id) {
+                            if let Some(channel) = reply {
+                                let _ = channel.send(Some(s.clone()));
+                            }
+                        };
+                    }
+                    SessionMessage::Remove(id, reply) => {
+                        if let Some(s) = sessions.remove(&id) {
+                            if let Some(channel) = reply {
+                                let _ = channel.send(Some(s.clone()));
+                                drop(s);
+                            }
+                        }
+
+                        tracing::debug!("Current total sessions: {}", sessions.len());
+                    }
+                };
+            }
+        });
+
         Self {
             endpoints,
-            sessions: WebSocketSessions::default(),
+            sessions_tx: tx,
         }
     }
 
     #[tracing::instrument(level = "trace", skip(self, socket, ctx))]
     async fn handle_new_session(
-        &mut self,
+        &self,
         socket: WebSocketStream<TokioAdapter<TcpStream>>,
         ctx: ConnectionContext,
     ) {
         let (ws_session_tx, ws_session_rx) = socket.split();
-        let (tx, rx) = mpsc::unbounded_channel::<WebSocketMessage>();
-
+        let (tx, rx) = unbounded_channel::<WebSocketMessage>();
         let session = WebSocketSession::new(ctx, tx);
         let session_id = session.id();
 
@@ -68,7 +102,7 @@ impl Server {
 
     #[tracing::instrument(level = "trace", skip(self, request))]
     async fn handle_web_request(
-        &mut self,
+        &self,
         request: Request<Body>,
     ) -> Arc<hyper::Result<Response<Body>>> {
         self.endpoints.handle_web_request(request).await
@@ -80,42 +114,47 @@ impl Server {
 
     /// Add a new web socket session to the server after a successful connection upgrade
     #[tracing::instrument(level = "trace", skip(self, session))]
-    async fn add_session(&mut self, session: WebSocketSession) {
+    async fn add_session(&self, session: WebSocketSession) {
         tracing::trace!(
             "adding session: {:?}, for path: {}",
             session.id(),
             session.context().path()
         );
         let session2 = session.clone();
-        let len: usize = {
-            let mut lock = self.sessions.write().await;
-            lock.insert(session.id(), session);
-            lock.len()
-        };
-
-        tracing::trace!("total sessions: {}", len);
+        let _ = self.sessions_tx.send(SessionMessage::Add(session));
         self.endpoints.on_open(&session2).await;
     }
 
     /// Removed a web socket session from the server
     #[tracing::instrument(level = "trace", skip(self))]
     async fn remove_session(&self, session_id: Uuid) {
-        let s = { self.sessions.write().await.remove(session_id.borrow()) };
-        drop(s);
-
-        let len = { self.sessions.read().await.len() };
-        tracing::debug!("Current total active sessions: {}", len);
+        let _ = self
+            .sessions_tx
+            .send(SessionMessage::Remove(session_id, None));
     }
 
     /// Receive message from the web socket connection
     #[tracing::instrument(level = "trace", skip(self, message))]
     pub async fn recv(&mut self, session_id: Uuid, message: WebSocketMessage) {
-        let session = {
-            let lock = self.sessions.read().await;
-            match lock.get(session_id.borrow()) {
-                Some(v) => v.clone(),
-                None => return,
+        let (tx, rx) = channel();
+        if self
+            .sessions_tx
+            .send(SessionMessage::Get(session_id, Some(tx)))
+            .is_err()
+        {
+            tracing::error!("Unable to request WebSocketSession from task");
+            return;
+        }
+
+        let session = match rx.await {
+            Ok(s) => {
+                if let Some(s) = s {
+                    s
+                } else {
+                    return;
+                }
             }
+            Err(_) => return,
         };
 
         if message.is_close() {
@@ -126,6 +165,7 @@ impl Server {
             );
 
             self.endpoints.on_close(&session, message).await;
+            // FIXME: we have &mut self just because this call
             self.endpoints.remove_ws_channel(&session);
             self.remove_session(session_id).await;
         } else if message.is_text() || message.is_binary() {
@@ -143,7 +183,6 @@ impl Server {
                 session_id
             );
         } else {
-            tracing::error!("What kind of message is that?!");
             unimplemented!("What kind of message is that?!");
         }
     }

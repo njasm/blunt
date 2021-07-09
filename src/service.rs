@@ -157,11 +157,16 @@ impl Service<Request<Body>> for Router {
 
 pub(crate) struct HttpService {
     engine: crate::Server,
+    registered_paths: HashMap<&'static str, ForPath>,
 }
 
 impl HttpService {
     pub(crate) fn new(engine: crate::Server) -> Self {
-        Self { engine }
+        let paths = engine.endpoints.get_paths();
+        Self {
+            engine,
+            registered_paths: paths,
+        }
     }
 
     pub(crate) async fn serve(self, addrs: SocketAddr) -> Server<AddrIncoming, HttpService> {
@@ -184,8 +189,8 @@ impl Service<&AddrStream> for HttpService {
 
     fn call(&mut self, _: &AddrStream) -> Self::Future {
         let (tx, mut rx) = unbounded_channel();
-        let mut engine = self.engine.clone();
-        let paths = engine.endpoints.get_paths();
+        let engine = self.engine.clone();
+        let paths = self.registered_paths.clone();
         tokio::spawn(async move {
             loop {
                 match rx.recv().await {
