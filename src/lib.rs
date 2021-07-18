@@ -19,6 +19,7 @@ pub mod endpoints;
 pub mod webhandler;
 pub mod websocket;
 
+use crate::service::RequestType;
 pub use async_trait::async_trait;
 pub use async_tungstenite::tungstenite::protocol::{frame::coding::CloseCode, CloseFrame};
 pub use hyper::{Body, Request, Response, Result, StatusCode};
@@ -26,6 +27,8 @@ pub use hyper::{Body, Request, Response, Result, StatusCode};
 #[derive(Clone, Debug)]
 pub struct Server {
     endpoints: Endpoints,
+    service_tx: tokio::sync::mpsc::UnboundedSender<RequestType>,
+    socket_tx: tokio::sync::mpsc::UnboundedSender<(Uuid, WebSocketMessage)>,
     sessions_tx: tokio::sync::mpsc::UnboundedSender<SessionMessage>,
 }
 
@@ -39,11 +42,19 @@ enum SessionMessage {
     Remove(Uuid, Option<Sender<Option<WebSocketSession>>>),
     /// Returns a cloned Web Socket Session identified by the Uuid
     Get(Uuid, Option<Sender<Option<WebSocketSession>>>),
+    #[allow(dead_code)]
+    Metrics(Sender<MetricsMetadata>),
+}
+
+#[derive(Clone, Debug)]
+struct MetricsMetadata {
+    total_sessions: usize,
+    path_counter: HashMap<String, usize>,
 }
 
 impl Server {
     pub(crate) fn new(endpoints: Endpoints) -> Self {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (sessions_tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         tokio::task::spawn(async move {
             let mut sessions = HashMap::new();
             while let Some(data) = rx.recv().await {
@@ -69,14 +80,63 @@ impl Server {
 
                         tracing::debug!("Current total sessions: {}", sessions.len());
                     }
+                    SessionMessage::Metrics(reply) => {
+                        let total = sessions.len();
+                        let mut map = HashMap::new();
+                        for value in sessions.iter() {
+                            let path = value.1.context().path();
+                            if let Some(value) = map.get_mut(&path) {
+                                *value += 1usize;
+                            } else {
+                                map.insert(path, 1usize);
+                            }
+                        }
+
+                        let _ = reply.send(MetricsMetadata {
+                            total_sessions: total,
+                            path_counter: map,
+                        });
+                    }
                 };
             }
         });
 
-        Self {
+        let (socket_tx, mut rx) = unbounded_channel::<(Uuid, WebSocketMessage)>();
+        let (service_tx, mut service_rx) = unbounded_channel::<RequestType>();
+        let server = Self {
             endpoints,
-            sessions_tx: tx,
-        }
+            service_tx,
+            socket_tx,
+            sessions_tx,
+        };
+        let server2 = server.clone();
+        tokio::task::spawn(async move {
+            while let Some((id, msg)) = rx.recv().await {
+                server2.recv(id, msg).await;
+            }
+        });
+
+        let server2 = server.clone();
+        tokio::task::spawn(async move {
+            loop {
+                match service_rx.recv().await {
+                    Some(RequestType::Socket(wrapper)) => {
+                        let (ws, ctx) = wrapper.into_parts();
+                        server2.handle_new_session(ws, ctx).await
+                    }
+                    Some(RequestType::Web(wrapper)) => {
+                        let (request, channel) = wrapper.into_parts();
+                        let result = server2.handle_web_request(request).await;
+                        if channel.send(result).is_err() {
+                            tracing::error!("Send Error!")
+                        }
+                    }
+                    None => return,
+                };
+            }
+        });
+
+        server
     }
 
     #[tracing::instrument(level = "trace", skip(self, socket, ctx))]
@@ -91,8 +151,12 @@ impl Server {
         let session_id = session.id();
 
         // async task to receive messages from the web socket connection
-        let ws_server2 = self.clone();
-        websocket::register_recv_ws_message_handling(ws_server2, ws_session_rx, session_id).await;
+        websocket::register_recv_ws_message_handling(
+            self.socket_tx.clone(),
+            ws_session_rx,
+            session_id,
+        )
+            .await;
 
         // async task to send messages to the web socket connection
         websocket::register_send_to_ws_message_handling(ws_session_tx, rx).await;
@@ -121,12 +185,13 @@ impl Server {
             session.context().path()
         );
         let session2 = session.clone();
-        let _ = self.sessions_tx.send(SessionMessage::Add(session));
-        self.endpoints.on_open(&session2).await;
+        if self.sessions_tx.send(SessionMessage::Add(session)).is_ok() {
+            self.endpoints.on_open(&session2).await;
+        }
     }
 
     /// Removed a web socket session from the server
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[tracing::instrument(level = "trace", skip(self, session_id))]
     async fn remove_session(&self, session_id: Uuid) {
         let _ = self
             .sessions_tx
@@ -134,8 +199,8 @@ impl Server {
     }
 
     /// Receive message from the web socket connection
-    #[tracing::instrument(level = "trace", skip(self, message))]
-    pub async fn recv(&mut self, session_id: Uuid, message: WebSocketMessage) {
+    #[tracing::instrument(level = "trace", skip(self, session_id, message))]
+    pub async fn recv(&self, session_id: Uuid, message: WebSocketMessage) {
         let (tx, rx) = channel();
         if self
             .sessions_tx
@@ -165,8 +230,6 @@ impl Server {
             );
 
             self.endpoints.on_close(&session, message).await;
-            // FIXME: we have &mut self just because this call
-            self.endpoints.remove_ws_channel(&session);
             self.remove_session(session_id).await;
         } else if message.is_text() || message.is_binary() {
             tracing::trace!(

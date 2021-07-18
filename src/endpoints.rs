@@ -72,11 +72,6 @@ impl Endpoints {
         });
     }
 
-    pub(crate) fn remove_ws_channel(&mut self, session: &WebSocketSession) {
-        let c = self.ws_channels.remove(session.context().path().as_str());
-        drop(c)
-    }
-
     #[tracing::instrument(level = "trace")]
     pub(crate) async fn on_open(&self, session: &WebSocketSession) {
         self.ws_channels

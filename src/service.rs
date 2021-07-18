@@ -48,14 +48,11 @@ impl Router {
                             reason: Default::default(),
                         };
 
-                        match e.0 {
-                            RequestType::Socket(wrapper) => {
-                                let (mut ws, ctx) = wrapper.into_parts();
-                                let _ = ws.close(Some(frame)).await;
-                                drop(ctx);
-                                drop(ws);
-                            }
-                            _ => unreachable!("We should never get here"),
+                        if let RequestType::Socket(wrapper) = e.0 {
+                            let (mut ws, ctx) = wrapper.into_parts();
+                            let _ = ws.close(Some(frame)).await;
+                            drop(ctx);
+                            drop(ws);
                         }
                     }
                 }
@@ -188,40 +185,20 @@ impl Service<&AddrStream> for HttpService {
     }
 
     fn call(&mut self, _: &AddrStream) -> Self::Future {
-        let (tx, mut rx) = unbounded_channel();
-        let engine = self.engine.clone();
+        let tx = self.engine.service_tx.clone();
         let paths = self.registered_paths.clone();
-        tokio::spawn(async move {
-            loop {
-                match rx.recv().await {
-                    Some(RequestType::Socket(wrapper)) => {
-                        let (ws, ctx) = wrapper.into_parts();
-                        engine.handle_new_session(ws, ctx).await
-                    }
-                    Some(RequestType::Web(wrapper)) => {
-                        let (request, channel) = wrapper.into_parts();
-                        let result = engine.handle_web_request(request).await;
-                        if channel.send(result).is_err() {
-                            tracing::error!("Send Error!")
-                        }
-                    }
-                    None => return,
-                };
-            }
-        });
-
         Box::pin(async move { Ok(Router { tx, paths }) })
     }
 }
 
 #[derive(Clone)]
-enum RequestType {
+pub(crate) enum RequestType {
     Socket(WebSocketConnWrapper),
     Web(WebConnWrapper),
 }
 
 #[derive(Clone)]
-struct WebSocketConnWrapper {
+pub(crate) struct WebSocketConnWrapper {
     ws: Arc<WebSocketStream<TokioAdapter<TcpStream>>>,
     ctx: ConnectionContext,
 }
@@ -234,7 +211,9 @@ impl WebSocketConnWrapper {
         }
     }
 
-    fn into_parts(self) -> (WebSocketStream<TokioAdapter<TcpStream>>, ConnectionContext) {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (WebSocketStream<TokioAdapter<TcpStream>>, ConnectionContext) {
         let ws = Arc::try_unwrap(self.ws).unwrap();
         (ws, self.ctx)
     }
