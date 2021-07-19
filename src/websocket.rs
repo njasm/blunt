@@ -1,4 +1,3 @@
-use crate::Server;
 use async_tungstenite::tungstenite::http::HeaderMap;
 use core::fmt::Debug;
 
@@ -21,7 +20,7 @@ use uuid::Uuid;
 
 /// Async task to receive messages from the web socket connection
 pub(crate) async fn register_recv_ws_message_handling(
-    mut server: Server,
+    server_socket_tx: UnboundedSender<(Uuid, WebSocketMessage)>,
     mut ws_session_rx: SplitStream<WebSocketStream<TokioAdapter<TcpStream>>>,
     session_id: impl Into<Uuid>,
 ) {
@@ -30,7 +29,9 @@ pub(crate) async fn register_recv_ws_message_handling(
         async move {
             while let Some(result) = ws_session_rx.next().await {
                 match result {
-                    Ok(msg) => server.recv(session_id, msg).await,
+                    Ok(msg) => {
+                        let _ = server_socket_tx.send((session_id, msg));
+                    }
                     Err(e) => {
                         let error_message = format!("Receive from websocket: {:?}", e);
                         error!("{}", error_message);
@@ -41,13 +42,13 @@ pub(crate) async fn register_recv_ws_message_handling(
                         };
 
                         warn!("Dropping channel 'ws_session_rx' -> server::recv()");
-                        server.recv(session_id, Message::Close(Some(frame))).await;
+                        let _ = server_socket_tx.send((session_id, Message::Close(Some(frame))));
                         return;
                     }
                 }
             }
 
-            warn!("we are leaving the gibson - channel dropped");
+            warn!("we are leaving the gibson - tx channel dropped");
         }
         .instrument(trace_span!("recv_from_ws_task")),
     );
@@ -68,6 +69,8 @@ pub(crate) async fn register_send_to_ws_message_handling(
                     return;
                 }
             }
+
+            warn!("we are leaving the gibson - rx channel dropped");
         }
         .instrument(trace_span!("send_to_ws_task")),
     );
