@@ -156,7 +156,7 @@ impl Server {
             ws_session_rx,
             session_id,
         )
-            .await;
+        .await;
 
         // async task to send messages to the web socket connection
         websocket::register_send_to_ws_message_handling(ws_session_tx, rx).await;
