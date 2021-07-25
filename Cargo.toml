@@ -1,6 +1,6 @@
 [package]
 name = "blunt"
-version = "0.0.7"
+version = "0.0.8"
 authors = ["Nelson J Morais <njmorais@gmail.com>"]
 edition = "2018"
 description = "Highly opinionated way to build asynchronous Websocket servers with Rust."
