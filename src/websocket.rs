@@ -5,8 +5,6 @@ use async_trait::async_trait;
 use std::net::SocketAddr;
 
 use async_tungstenite::tokio::TokioAdapter;
-use async_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
-use async_tungstenite::tungstenite::protocol::CloseFrame;
 use async_tungstenite::tungstenite::Message;
 use async_tungstenite::WebSocketStream;
 use futures::stream::{SplitSink, SplitStream};
@@ -79,10 +77,40 @@ pub(crate) async fn register_send_to_ws_message_handling(
 /// Our Websocket Message
 pub type WebSocketMessage = async_tungstenite::tungstenite::protocol::Message;
 
+pub type CloseFrame<'t> = async_tungstenite::tungstenite::protocol::CloseFrame<'t>;
+pub type CloseCode = async_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+
 #[async_trait]
 pub trait WebSocketHandler: Sync + Send + Debug {
     async fn on_open(&mut self, ws: &WebSocketSession);
-    async fn on_message(&mut self, ws: &WebSocketSession, msg: WebSocketMessage);
+    async fn on_message(&mut self, ws: &WebSocketSession, msg: WebSocketMessage) {
+        match msg {
+            WebSocketMessage::Text(s) => self.on_message_text(ws, s).await,
+            WebSocketMessage::Binary(b) => self.on_message_binary(ws, b).await,
+            WebSocketMessage::Ping(b) => self.on_message_ping(ws, b).await,
+            WebSocketMessage::Pong(b) => self.on_message_ping(ws, b).await,
+            WebSocketMessage::Close(frame) => self.on_message_close(ws, frame).await,
+        };
+    }
+
+    async fn on_message_text(&mut self, _: &WebSocketSession, _: String) {}
+    async fn on_message_binary(&mut self, _: &WebSocketSession, _: Vec<u8>) {}
+
+    async fn on_message_ping(&mut self, ws: &WebSocketSession, data: Vec<u8>) {
+        let _ = ws.send(WebSocketMessage::Pong(data));
+    }
+
+    async fn on_message_pong(&mut self, _: &WebSocketSession, _: Vec<u8>) {}
+    async fn on_message_close(
+        &mut self,
+        ws: &WebSocketSession,
+        frame: Option<CloseFrame<'static>>,
+    ) {
+        //fixme: this could should be removed after the deprecation of
+        // self::on_close() for WS Close Message processing
+        self.on_close(ws, WebSocketMessage::Close(frame)).await;
+    }
+
     async fn on_close(&mut self, ws: &WebSocketSession, msg: WebSocketMessage);
 }
 

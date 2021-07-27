@@ -59,15 +59,8 @@ impl WebSocketHandler for ChatServer {
         self.broadcast(ws.id(), WebSocketMessage::Text(msg)).await;
     }
 
-    async fn on_message(&mut self, ws: &WebSocketSession, msg: WebSocketMessage) {
-        // for the sake of the example, lets just handle text messages
-        let final_msg = match msg {
-            WebSocketMessage::Text(t) => format!("{}: {}", ws.id(), t),
-            _ => format!("{}: {}", ws.id(), ""),
-        };
-
-        self.broadcast(ws.id(), WebSocketMessage::Text(final_msg))
-            .await;
+    async fn on_message_text(&mut self, ws: &WebSocketSession, msg: String) {
+        self.broadcast(ws.id(), WebSocketMessage::Text(msg)).await;
     }
 
     async fn on_close(&mut self, ws: &WebSocketSession, _msg: WebSocketMessage) {

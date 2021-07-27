@@ -222,31 +222,10 @@ impl Server {
             Err(_) => return,
         };
 
-        if message.is_close() {
-            tracing::trace!(
-                "received message {:?} from session id: {:?}",
-                message,
-                session_id
-            );
-
-            self.endpoints.on_close(&session, message).await;
+        let is_close = message.is_close();
+        self.endpoints.on_message(&session, message).await;
+        if is_close {
             self.remove_session(session_id).await;
-        } else if message.is_text() || message.is_binary() {
-            tracing::trace!(
-                "received message {:?} from session id: {:?}",
-                message,
-                session_id
-            );
-            self.endpoints.on_message(&session, message).await;
-        } else if message.is_ping() || message.is_pong() {
-            // tunges is handling this type of messages for us
-            tracing::trace!(
-                "received message {:?} from session id: {:?}",
-                message,
-                session_id
-            );
-        } else {
-            unimplemented!("What kind of message is that?!");
         }
     }
 }

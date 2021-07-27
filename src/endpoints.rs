@@ -18,7 +18,6 @@ pub(crate) enum Dispatch {
 pub(crate) enum WebSocketDispatch {
     Open(WebSocketSession),
     Message(WebSocketSession, WebSocketMessage),
-    Close(WebSocketSession, WebSocketMessage),
 }
 
 #[derive(Debug, Clone)]
@@ -66,7 +65,6 @@ impl Endpoints {
                     WebSocketDispatch::Message(session, msg) => {
                         handler.on_message(&session, msg).await
                     }
-                    WebSocketDispatch::Close(session, msg) => handler.on_close(&session, msg).await,
                 };
             }
         });
@@ -89,12 +87,12 @@ impl Endpoints {
             });
     }
 
-    #[tracing::instrument(level = "trace")]
-    pub(crate) async fn on_close(&self, session: &WebSocketSession, msg: WebSocketMessage) {
-        self.ws_channels
-            .get(session.context().path().as_str())
-            .and_then(|tx| tx.send(WebSocketDispatch::Close(session.clone(), msg)).ok());
-    }
+    // #[tracing::instrument(level = "trace")]
+    // pub(crate) async fn on_close(&self, session: &WebSocketSession, msg: WebSocketMessage) {
+    //     self.ws_channels
+    //         .get(session.context().path().as_str())
+    //         .and_then(|tx| tx.send(WebSocketDispatch::Close(session.clone(), msg)).ok());
+    // }
 
     pub(crate) fn insert_web_handler(
         &mut self,
