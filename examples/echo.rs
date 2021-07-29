@@ -5,11 +5,14 @@ use hyper::{Body, Response};
 use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
+use blunt::handler::Handler;
+use blunt::server::AppContext;
+use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> hyper::Result<()> {
     if std::env::var("RUST_LOG").is_err() {
-        std::env::set_var("RUST_LOG", "blunt=trace");
+        std::env::set_var("RUST_LOG", "info,blunt=trace");
     }
     // just for a nice compact tracing messages
     FmtSubscriber::builder()
@@ -34,25 +37,51 @@ async fn main() -> hyper::Result<()> {
 }
 
 #[derive(Debug, Default)]
-pub struct EchoServer;
+pub struct EchoServer {
+    app: Option<AppContext>,
+}
+
+impl Handler for EchoServer {
+    fn init(&mut self, app: AppContext) {
+        self.app = Some(app);
+    }
+}
 
 #[blunt::async_trait]
 impl WebSocketHandler for EchoServer {
-    async fn on_open(&mut self, ws: &WebSocketSession) {
-        info!("new connection open with id: {}", ws.id());
+    async fn on_open(&mut self, session_id: Uuid) {
+        info!("new connection open with id: {}", session_id);
+        self.app
+            .as_ref()
+            .unwrap()
+            .session(session_id)
+            .await
+            .and_then(|s| {
+                let _ = s.send(WebSocketMessage::Text(String::from("Welcome to Echo server!")));
+                Some(())
+            });
     }
 
-    async fn on_message(&mut self, ws: &WebSocketSession, msg: WebSocketMessage) {
+    async fn on_message(&mut self, session_id: Uuid, msg: WebSocketMessage) {
         info!(
             "echo back for session id {}, with message: {}",
-            ws.id(),
+            session_id,
             msg
         );
-        ws.send(msg).expect("Unable to send message");
+
+        self.app
+            .as_ref()
+            .unwrap()
+            .session(session_id)
+            .await
+            .and_then(|s| {
+                let _ = s.send(msg);
+                Some(())
+            });
     }
 
-    async fn on_close(&mut self, ws: &WebSocketSession, _msg: WebSocketMessage) {
-        info!("connection closed for session id {}", ws.id());
+    async fn on_close(&mut self, session_id: Uuid, _msg: WebSocketMessage) {
+        info!("connection closed for session id {}", session_id);
     }
 }
 

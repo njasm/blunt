@@ -5,6 +5,8 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::RwLock;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 use uuid::Uuid;
+use blunt::server::AppContext;
+use blunt::handler::Handler;
 
 #[tokio::main]
 async fn main() -> hyper::Result<()> {
@@ -33,7 +35,7 @@ async fn main() -> hyper::Result<()> {
 type UserCollection = Arc<RwLock<HashMap<Uuid, UnboundedSender<WebSocketMessage>>>>;
 
 #[derive(Debug, Default)]
-pub struct ChatServer(UserCollection);
+pub struct ChatServer(UserCollection, Option<AppContext>);
 
 impl ChatServer {
     async fn broadcast(&mut self, except_id: Uuid, msg: WebSocketMessage) {
@@ -45,9 +47,22 @@ impl ChatServer {
     }
 }
 
+impl Handler for ChatServer {
+    fn init(&mut self, app: AppContext) {
+        self.1 = Some(app);
+    }
+}
+
 #[blunt::async_trait]
 impl WebSocketHandler for ChatServer {
-    async fn on_open(&mut self, ws: &WebSocketSession) {
+    async fn on_open(&mut self, session_id: Uuid) {
+        let ws = self.1
+            .as_ref()
+            .unwrap()
+            .session(session_id)
+            .await
+            .unwrap();
+
         {
             self.0.write().await.insert(ws.id(), ws.channel());
         }
@@ -59,19 +74,19 @@ impl WebSocketHandler for ChatServer {
         self.broadcast(ws.id(), WebSocketMessage::Text(msg)).await;
     }
 
-    async fn on_message_text(&mut self, ws: &WebSocketSession, msg: String) {
-        self.broadcast(ws.id(), WebSocketMessage::Text(msg)).await;
+    async fn on_message_text(&mut self, session_id: Uuid, msg: String) {
+        self.broadcast(session_id, WebSocketMessage::Text(msg)).await;
     }
 
-    async fn on_close(&mut self, ws: &WebSocketSession, _msg: WebSocketMessage) {
+    async fn on_close(&mut self, session_id: Uuid, _msg: WebSocketMessage) {
         let (session, len) = {
             let mut guard = self.0.write().await;
-            (guard.remove(&ws.id()), guard.len())
+            (guard.remove(&session_id), guard.len())
         };
 
         drop(session);
 
-        let msg = format!("User {} left the chat. (current users: {})", ws.id(), len);
-        self.broadcast(ws.id(), WebSocketMessage::Text(msg)).await;
+        let msg = format!("User {} left the chat. (current users: {})", session_id, len);
+        self.broadcast(session_id, WebSocketMessage::Text(msg)).await;
     }
 }

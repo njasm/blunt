@@ -1,6 +1,6 @@
 use crate::webhandler::WebHandler;
 use crate::websocket::WebSocketHandler;
-use crate::{Endpoints, Server};
+use crate::{Endpoints, server::Server};
 
 #[derive(Clone)]
 pub struct Builder {
@@ -42,6 +42,6 @@ impl Builder {
     }
 
     pub fn build(self) -> Server {
-        crate::Server::new(self.endpoints)
+        Server::new(self.endpoints)
     }
 }

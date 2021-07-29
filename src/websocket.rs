@@ -15,6 +15,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tracing::{error, trace, trace_span, warn};
 use tracing_futures::Instrument;
 use uuid::Uuid;
+use crate::handler::Handler;
 
 /// Async task to receive messages from the web socket connection
 pub(crate) async fn register_recv_ws_message_handling(
@@ -81,37 +82,34 @@ pub type CloseFrame<'t> = async_tungstenite::tungstenite::protocol::CloseFrame<'
 pub type CloseCode = async_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 #[async_trait]
-pub trait WebSocketHandler: Sync + Send + Debug {
-    async fn on_open(&mut self, ws: &WebSocketSession);
-    async fn on_message(&mut self, ws: &WebSocketSession, msg: WebSocketMessage) {
+pub trait WebSocketHandler: Handler + Sync + Send + Debug {
+    async fn on_open(&mut self, session_id: Uuid);
+    async fn on_message(&mut self, session_id: Uuid, msg: WebSocketMessage) {
         match msg {
-            WebSocketMessage::Text(s) => self.on_message_text(ws, s).await,
-            WebSocketMessage::Binary(b) => self.on_message_binary(ws, b).await,
-            WebSocketMessage::Ping(b) => self.on_message_ping(ws, b).await,
-            WebSocketMessage::Pong(b) => self.on_message_ping(ws, b).await,
-            WebSocketMessage::Close(frame) => self.on_message_close(ws, frame).await,
+            WebSocketMessage::Text(s) => self.on_message_text(session_id, s).await,
+            WebSocketMessage::Binary(b) => self.on_message_binary(session_id, b).await,
+            WebSocketMessage::Ping(b) => self.on_message_ping(session_id, b).await,
+            WebSocketMessage::Pong(b) => self.on_message_ping(session_id, b).await,
+            WebSocketMessage::Close(frame) => self.on_message_close(session_id, frame).await,
         };
     }
 
-    async fn on_message_text(&mut self, _: &WebSocketSession, _: String) {}
-    async fn on_message_binary(&mut self, _: &WebSocketSession, _: Vec<u8>) {}
+    async fn on_message_text(&mut self, _: Uuid, _: String) {}
+    async fn on_message_binary(&mut self, _: Uuid, _: Vec<u8>) {}
+    async fn on_message_ping(&mut self, _: Uuid, data: Vec<u8>) {}
+    async fn on_message_pong(&mut self, _: Uuid, _: Vec<u8>) {}
 
-    async fn on_message_ping(&mut self, ws: &WebSocketSession, data: Vec<u8>) {
-        let _ = ws.send(WebSocketMessage::Pong(data));
-    }
-
-    async fn on_message_pong(&mut self, _: &WebSocketSession, _: Vec<u8>) {}
     async fn on_message_close(
         &mut self,
-        ws: &WebSocketSession,
+        session_id: Uuid,
         frame: Option<CloseFrame<'static>>,
     ) {
         //fixme: this could should be removed after the deprecation of
         // self::on_close() for WS Close Message processing
-        self.on_close(ws, WebSocketMessage::Close(frame)).await;
+        self.on_close(session_id, WebSocketMessage::Close(frame)).await;
     }
 
-    async fn on_close(&mut self, ws: &WebSocketSession, msg: WebSocketMessage);
+    async fn on_close(&mut self, session_id: Uuid, msg: WebSocketMessage);
 }
 
 /// Our websocket wrapper

@@ -7,7 +7,7 @@ use async_tungstenite::tungstenite::protocol::{CloseFrame, Role};
 use async_tungstenite::WebSocketStream;
 use hyper::server::conn::{AddrIncoming, AddrStream, Http};
 use hyper::service::Service;
-use hyper::{Body, Request, Response, Server, StatusCode};
+use hyper::Server as HyperServer;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -15,6 +15,8 @@ use std::task::{Context, Poll};
 use tokio::net::TcpStream;
 
 use crate::endpoints::ForPath;
+use crate::server::Server;
+use crate::{Body, Request, Response, StatusCode};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
@@ -153,12 +155,12 @@ impl Service<Request<Body>> for Router {
 }
 
 pub(crate) struct HttpService {
-    engine: crate::Server,
+    engine: crate::server::Server,
     registered_paths: HashMap<&'static str, ForPath>,
 }
 
 impl HttpService {
-    pub(crate) fn new(engine: crate::Server) -> Self {
+    pub(crate) fn new(engine: Server) -> Self {
         let paths = engine.endpoints.get_paths();
         Self {
             engine,
@@ -166,7 +168,7 @@ impl HttpService {
         }
     }
 
-    pub(crate) async fn serve(self, addrs: SocketAddr) -> Server<AddrIncoming, HttpService> {
+    pub(crate) async fn serve(self, addrs: SocketAddr) -> HyperServer<AddrIncoming, HttpService> {
         let incoming = AddrIncoming::bind(&addrs).unwrap();
         hyper::server::Builder::new(incoming, Http::new())
             .http2_max_concurrent_streams(1024u32)
