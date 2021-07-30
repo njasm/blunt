@@ -1,4 +1,7 @@
+mod rt;
 mod service;
+
+pub use rt::task::spawn;
 
 use crate::builder::Builder;
 use crate::endpoints::Endpoints;
@@ -8,8 +11,8 @@ use std::collections::HashMap;
 use tokio::sync::oneshot::Sender;
 
 pub mod builder;
-pub mod server;
 pub mod endpoints;
+pub mod server;
 pub mod webhandler;
 pub mod websocket;
 
@@ -21,15 +24,6 @@ use uuid::Uuid;
 pub fn builder() -> Builder {
     Builder::new()
 }
-
-pub mod handler {
-    use crate::server::AppContext;
-
-    pub trait Handler {
-        fn init(&mut self, app: AppContext);
-    }
-}
-
 
 /// Internal Message Type to work with the async Task
 /// responsible to handle the Web Socket Sessions Collection

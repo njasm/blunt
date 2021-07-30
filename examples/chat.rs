@@ -1,12 +1,11 @@
-use blunt::websocket::{WebSocketHandler, WebSocketMessage, WebSocketSession};
+use blunt::server::AppContext;
+use blunt::websocket::{WebSocketHandler, WebSocketMessage};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::RwLock;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 use uuid::Uuid;
-use blunt::server::AppContext;
-use blunt::handler::Handler;
 
 #[tokio::main]
 async fn main() -> hyper::Result<()> {
@@ -22,9 +21,8 @@ async fn main() -> hyper::Result<()> {
         .compact()
         .init();
 
-    let handler = ChatServer::default();
     ::blunt::builder()
-        .for_path("/chat", handler)
+        .for_path_with_ctor("/chat", |app| ChatServer(UserCollection::default(), app))
         .build()
         .bind("127.0.0.1:3000".parse().expect("Invalid Socket Addr"))
         .await?;
@@ -34,8 +32,8 @@ async fn main() -> hyper::Result<()> {
 
 type UserCollection = Arc<RwLock<HashMap<Uuid, UnboundedSender<WebSocketMessage>>>>;
 
-#[derive(Debug, Default)]
-pub struct ChatServer(UserCollection, Option<AppContext>);
+#[derive(Debug)]
+pub struct ChatServer(UserCollection, AppContext);
 
 impl ChatServer {
     async fn broadcast(&mut self, except_id: Uuid, msg: WebSocketMessage) {
@@ -47,22 +45,10 @@ impl ChatServer {
     }
 }
 
-impl Handler for ChatServer {
-    fn init(&mut self, app: AppContext) {
-        self.1 = Some(app);
-    }
-}
-
 #[blunt::async_trait]
 impl WebSocketHandler for ChatServer {
     async fn on_open(&mut self, session_id: Uuid) {
-        let ws = self.1
-            .as_ref()
-            .unwrap()
-            .session(session_id)
-            .await
-            .unwrap();
-
+        let ws = self.1.session(session_id).await.unwrap();
         {
             self.0.write().await.insert(ws.id(), ws.channel());
         }
@@ -75,7 +61,8 @@ impl WebSocketHandler for ChatServer {
     }
 
     async fn on_message_text(&mut self, session_id: Uuid, msg: String) {
-        self.broadcast(session_id, WebSocketMessage::Text(msg)).await;
+        self.broadcast(session_id, WebSocketMessage::Text(msg))
+            .await;
     }
 
     async fn on_close(&mut self, session_id: Uuid, _msg: WebSocketMessage) {
@@ -86,7 +73,11 @@ impl WebSocketHandler for ChatServer {
 
         drop(session);
 
-        let msg = format!("User {} left the chat. (current users: {})", session_id, len);
-        self.broadcast(session_id, WebSocketMessage::Text(msg)).await;
+        let msg = format!(
+            "User {} left the chat. (current users: {})",
+            session_id, len
+        );
+        self.broadcast(session_id, WebSocketMessage::Text(msg))
+            .await;
     }
 }

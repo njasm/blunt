@@ -1,4 +1,4 @@
-use crate::websocket::{WebSocketHandler, WebSocketMessage, WebSocketSession};
+use crate::websocket::{WebSocketHandler, WebSocketMessage};
 
 use crate::webhandler::WebHandler;
 use hyper::{Body, Request, Response, Result};
@@ -9,7 +9,6 @@ use tracing::error;
 
 use crate::service::WebConnWrapper;
 use uuid::Uuid;
-use crate::server::AppContext;
 
 #[derive(Debug, Clone)]
 pub(crate) enum Dispatch {
@@ -18,7 +17,7 @@ pub(crate) enum Dispatch {
 
 #[derive(Debug, Clone)]
 pub(crate) enum WebSocketDispatch {
-    Init(AppContext),
+    //Init(AppContext),
     Open(Uuid),
     Message(Uuid, WebSocketMessage),
 }
@@ -36,12 +35,6 @@ pub(crate) struct Endpoints {
 }
 
 impl Endpoints {
-    pub(crate) fn init_handlers(&self, app: AppContext) {
-        for v in self.ws_channels.iter() {
-            let _ = v.1.send(WebSocketDispatch::Init(app.clone()));
-        }
-    }
-
     pub(crate) fn get_paths(&self) -> HashMap<&'static str, ForPath> {
         let mut result = HashMap::with_capacity(self.ws_channels.len() + self.web_channels.len());
         self.ws_channels.iter().for_each(|(k, _v)| {
@@ -70,7 +63,7 @@ impl Endpoints {
         tokio::spawn(async move {
             while let Some(message) = rx.recv().await {
                 match message {
-                    WebSocketDispatch::Init(app) => handler.init(app),
+                    //WebSocketDispatch::Init(app) => handler.init(app),
                     WebSocketDispatch::Open(session_id) => handler.on_open(session_id).await,
                     WebSocketDispatch::Message(session_id, msg) => {
                         handler.on_message(session_id, msg).await
@@ -91,10 +84,7 @@ impl Endpoints {
     pub(crate) async fn on_message(&self, session_id: Uuid, path: &str, msg: WebSocketMessage) {
         self.ws_channels
             .get(path)
-            .and_then(|tx| {
-                tx.send(WebSocketDispatch::Message(session_id, msg))
-                    .ok()
-            });
+            .and_then(|tx| tx.send(WebSocketDispatch::Message(session_id, msg)).ok());
     }
 
     pub(crate) fn insert_web_handler(

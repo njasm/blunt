@@ -16,7 +16,7 @@ use tokio::net::TcpStream;
 
 use crate::endpoints::ForPath;
 use crate::server::Server;
-use crate::{Body, Request, Response, StatusCode};
+use crate::{spawn, Body, Request, Response, StatusCode};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
@@ -30,7 +30,7 @@ impl Router {
     /// Upgrade to a websocket connection
     fn upgrade(&mut self, mut req: Request<Body>) {
         let tx = self.tx.clone();
-        tokio::task::spawn(async move {
+        spawn(async move {
             match hyper::upgrade::on(&mut req).await {
                 Ok(upgraded) => {
                     let tcp_stream = match upgraded.downcast::<AddrStream>() {
@@ -193,13 +193,13 @@ impl Service<&AddrStream> for HttpService {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) enum RequestType {
     Socket(WebSocketConnWrapper),
     Web(WebConnWrapper),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct WebSocketConnWrapper {
     ws: Arc<WebSocketStream<TokioAdapter<TcpStream>>>,
     ctx: ConnectionContext,

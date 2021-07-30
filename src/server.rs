@@ -1,43 +1,50 @@
 use crate::endpoints::Endpoints;
 use crate::service::RequestType;
-use uuid::Uuid;
-use crate::websocket::{WebSocketMessage, ConnectionContext, WebSocketSession};
-use crate::{SessionMessage, websocket, service, MetricsMetadata, Request, CloseFrame, CloseCode};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use std::collections::HashMap;
-use async_tungstenite::WebSocketStream;
+use crate::websocket::{ConnectionContext, WebSocketMessage, WebSocketSession};
+use crate::{service, spawn, websocket, MetricsMetadata, Request, SessionMessage};
 use async_tungstenite::tokio::TokioAdapter;
+use async_tungstenite::WebSocketStream;
 use futures::StreamExt;
+use std::collections::HashMap;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use uuid::Uuid;
 
-use tokio::sync::oneshot::{channel, Sender};
-use std::sync::Arc;
 use crate::{Body, Response};
-use tokio::net::TcpStream;
 use std::net::SocketAddr;
-use std::future::Future;
+use std::sync::Arc;
+use tokio::net::TcpStream;
+use tokio::sync::oneshot::{channel, Sender};
 
 #[derive(Debug)]
 pub(crate) enum Command {
+    // Generic web socket session's context internal messages
     WsSession(SessionMessage),
-    Metrics(Sender<MetricsMetadata>)
+    // handle web socket inbound message
+    WebSocketMessageReceiving(Uuid, WebSocketMessage),
+    // handle tower service requests (http requests)
+    Handle(RequestType),
+    Metrics(Sender<MetricsMetadata>),
 }
 
 #[derive(Clone, Debug)]
 pub struct AppContext {
     tx: UnboundedSender<Command>,
+    path: String,
 }
 
 impl AppContext {
-    pub(crate) fn new(tx: UnboundedSender<Command>) -> Self {
-        Self { tx }
+    pub(crate) fn new(tx: UnboundedSender<Command>, path: String) -> Self {
+        Self { tx, path }
     }
 
     pub async fn session(&self, id: Uuid) -> Option<WebSocketSession> {
         let (tx, rx) = channel();
-        let _ = self.tx.send(Command::WsSession(SessionMessage::Get(id, Some(tx))));
+        let _ = self
+            .tx
+            .send(Command::WsSession(SessionMessage::Get(id, Some(tx))));
         match rx.await {
             Ok(data) => data,
-            Err(_) => None
+            Err(_) => None,
         }
     }
 
@@ -46,7 +53,7 @@ impl AppContext {
         let _ = self.tx.send(Command::Metrics(tx));
         match rx.await {
             Ok(data) => Some(data),
-            Err(_) => None
+            Err(_) => None,
         }
     }
 }
@@ -61,16 +68,17 @@ pub struct Server {
 }
 
 impl Server {
-    pub(crate) fn new(endpoints: Endpoints) -> Self {
+    pub(crate) fn new(
+        endpoints: Endpoints,
+        channels: (UnboundedSender<Command>, UnboundedReceiver<Command>),
+    ) -> Self {
         let (sessions_tx, sessions_rx) = unbounded_channel();
-        tokio::task::spawn(register_sessions_handle_task(sessions_rx));
+        spawn(register_sessions_handle_task(sessions_rx));
 
         let (socket_tx, mut socket_rx) = unbounded_channel::<(Uuid, WebSocketMessage)>();
         let (service_tx, service_rx) = unbounded_channel::<RequestType>();
-        let (command_tx, mut command_rx) = unbounded_channel::<Command>();
-
-        let ctx = AppContext::new(command_tx.clone());
-        endpoints.init_handlers(ctx);
+        //let (command_tx, mut command_rx) = unbounded_channel::<Command>();
+        let (command_tx, mut command_rx) = channels;
 
         let server = Self {
             endpoints,
@@ -81,28 +89,47 @@ impl Server {
         };
 
         let server2 = server.clone();
-        tokio::task::spawn(async move {
+        spawn(async move {
             while let Some(cmd) = command_rx.recv().await {
                 match cmd {
                     Command::WsSession(sess_msg) => {
-                        let _ = server2.sessions_tx.send(sess_msg);
+                        server2.sessions_tx.send(sess_msg).ok();
                     }
                     Command::Metrics(channel) => {
-                        let _ = server2.sessions_tx.send(SessionMessage::Metrics(channel));
+                        server2
+                            .sessions_tx
+                            .send(SessionMessage::Metrics(channel))
+                            .ok();
                     }
+                    Command::WebSocketMessageReceiving(id, msg) => {
+                        server2.recv(id, msg).await;
+                    }
+                    Command::Handle(request_type) => match request_type {
+                        RequestType::Socket(wrapper) => {
+                            let (ws, ctx) = wrapper.into_parts();
+                            server2.handle_new_session(ws, ctx).await;
+                        }
+                        RequestType::Web(wrapper) => {
+                            let (request, channel) = wrapper.into_parts();
+                            let result = server2.handle_web_request(request).await;
+                            if channel.send(result).is_err() {
+                                tracing::error!("Send Error!")
+                            }
+                        }
+                    },
                 }
             }
         });
 
-        let server2 = server.clone();
-        tokio::task::spawn(async move {
+        let cmd_tx2 = server.command_tx.clone();
+        spawn(async move {
             while let Some((id, msg)) = socket_rx.recv().await {
-                server2.recv(id, msg).await;
+                let _ = cmd_tx2.send(Command::WebSocketMessageReceiving(id, msg));
             }
         });
 
-        let server2 = server.clone();
-        tokio::task::spawn(register_service_handle_task(server2, service_rx));
+        let cmd_tx2 = server.command_tx.clone();
+        spawn(register_service_handle_task(cmd_tx2, service_rx));
 
         server
     }
@@ -125,7 +152,7 @@ impl Server {
             ws_session_rx,
             session_id,
         )
-            .await;
+        .await;
 
         // async task to send messages to the web socket connection
         websocket::register_send_to_ws_message_handling(ws_session_tx, rx).await;
@@ -182,78 +209,69 @@ impl Server {
 
         let path = session.context().path();
         let is_close = message.is_close();
-        self.endpoints.on_message(session_id, path.as_str(), message).await;
+        self.endpoints
+            .on_message(session_id, path.as_str(), message)
+            .await;
         if is_close {
             self.remove_session(session_id).await;
         }
     }
 }
 
-fn register_sessions_handle_task(mut rx: UnboundedReceiver<SessionMessage>) -> impl Future<Output=()> {
-    async move {
-        let mut sessions = HashMap::new();
-        while let Some(data) = rx.recv().await {
-            match data {
-                SessionMessage::Add(ws) => {
-                    let _ = sessions.insert(ws.id(), ws);
-                    tracing::trace!("total sessions: {}", sessions.len());
-                }
-                SessionMessage::Get(id, reply) => {
-                    if let Some(s) = sessions.get(&id) {
-                        if let Some(channel) = reply {
-                            let _ = channel.send(Some(s.clone()));
-                        }
-                    };
-                }
-                SessionMessage::Remove(id, reply) => {
-                    if let Some(s) = sessions.remove(&id) {
-                        if let Some(channel) = reply {
-                            let _ = channel.send(Some(s.clone()));
-                        }
-                        drop(s);
+async fn register_sessions_handle_task(mut rx: UnboundedReceiver<SessionMessage>) {
+    let mut sessions = HashMap::new();
+    while let Some(data) = rx.recv().await {
+        match data {
+            SessionMessage::Add(ws) => {
+                sessions.insert(ws.id(), ws);
+                tracing::debug!("After insert, total sessions: {}", sessions.len());
+            }
+            SessionMessage::Get(id, reply) => {
+                if let Some(s) = sessions.get(&id) {
+                    if let Some(channel) = reply {
+                        let _ = channel.send(Some(s.clone()));
                     }
-
-                    tracing::debug!("Current total sessions: {}", sessions.len());
-                }
-                SessionMessage::Metrics(reply) => {
-                    let total = sessions.len();
-                    let mut map = HashMap::new();
-                    for value in sessions.iter() {
-                        let path = value.1.context().path();
-                        if let Some(value) = map.get_mut(&path) {
-                            *value += 1usize;
-                        } else {
-                            map.insert(path, 1usize);
-                        }
+                };
+            }
+            SessionMessage::Remove(id, reply) => {
+                if let Some(s) = sessions.remove(&id) {
+                    if let Some(channel) = reply {
+                        let _ = channel.send(Some(s.clone()));
                     }
-
-                    let _ = reply.send(MetricsMetadata {
-                        total_sessions: total,
-                        path_counter: map,
-                    });
+                    drop(s);
                 }
-            };
-        }
+
+                tracing::debug!("After remove, total sessions: {}", sessions.len());
+            }
+            SessionMessage::Metrics(reply) => {
+                let total = sessions.len();
+                let mut map = HashMap::new();
+                for value in sessions.iter() {
+                    let path = value.1.context().path();
+                    if let Some(value) = map.get_mut(&path) {
+                        *value += 1usize;
+                    } else {
+                        map.insert(path, 1usize);
+                    }
+                }
+
+                let _ = reply.send(MetricsMetadata {
+                    total_sessions: total,
+                    path_counter: map,
+                });
+            }
+        };
     }
 }
 
-fn register_service_handle_task(server: Server, mut service_rx: UnboundedReceiver<RequestType>) -> impl Future<Output=()> {
-    async move {
-        loop {
-            match service_rx.recv().await {
-                Some(RequestType::Socket(wrapper)) => {
-                    let (ws, ctx) = wrapper.into_parts();
-                    server.handle_new_session(ws, ctx).await
-                }
-                Some(RequestType::Web(wrapper)) => {
-                    let (request, channel) = wrapper.into_parts();
-                    let result = server.handle_web_request(request).await;
-                    if channel.send(result).is_err() {
-                        tracing::error!("Send Error!")
-                    }
-                }
-                None => return,
-            };
-        }
+async fn register_service_handle_task(
+    tx: UnboundedSender<Command>,
+    mut service_rx: UnboundedReceiver<RequestType>,
+) {
+    loop {
+        match service_rx.recv().await {
+            Some(request_type) => tx.send(Command::Handle(request_type)).ok(),
+            None => return,
+        };
     }
 }

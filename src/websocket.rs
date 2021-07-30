@@ -4,6 +4,7 @@ use core::fmt::Debug;
 use async_trait::async_trait;
 use std::net::SocketAddr;
 
+use crate::spawn;
 use async_tungstenite::tokio::TokioAdapter;
 use async_tungstenite::tungstenite::Message;
 use async_tungstenite::WebSocketStream;
@@ -15,7 +16,6 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tracing::{error, trace, trace_span, warn};
 use tracing_futures::Instrument;
 use uuid::Uuid;
-use crate::handler::Handler;
 
 /// Async task to receive messages from the web socket connection
 pub(crate) async fn register_recv_ws_message_handling(
@@ -24,7 +24,7 @@ pub(crate) async fn register_recv_ws_message_handling(
     session_id: impl Into<Uuid>,
 ) {
     let session_id = session_id.into();
-    tokio::spawn(
+    spawn(
         async move {
             while let Some(result) = ws_session_rx.next().await {
                 match result {
@@ -58,7 +58,7 @@ pub(crate) async fn register_send_to_ws_message_handling(
     mut ws_session_tx: SplitSink<WebSocketStream<TokioAdapter<TcpStream>>, WebSocketMessage>,
     mut rx: UnboundedReceiver<WebSocketMessage>,
 ) {
-    tokio::spawn(
+    spawn(
         async move {
             while let Some(result) = rx.recv().await {
                 trace!("Sending to websocket: {:?}", result);
@@ -82,7 +82,7 @@ pub type CloseFrame<'t> = async_tungstenite::tungstenite::protocol::CloseFrame<'
 pub type CloseCode = async_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 #[async_trait]
-pub trait WebSocketHandler: Handler + Sync + Send + Debug {
+pub trait WebSocketHandler: Sync + Send + Debug {
     async fn on_open(&mut self, session_id: Uuid);
     async fn on_message(&mut self, session_id: Uuid, msg: WebSocketMessage) {
         match msg {
@@ -96,17 +96,14 @@ pub trait WebSocketHandler: Handler + Sync + Send + Debug {
 
     async fn on_message_text(&mut self, _: Uuid, _: String) {}
     async fn on_message_binary(&mut self, _: Uuid, _: Vec<u8>) {}
-    async fn on_message_ping(&mut self, _: Uuid, data: Vec<u8>) {}
+    async fn on_message_ping(&mut self, _: Uuid, _: Vec<u8>) {}
     async fn on_message_pong(&mut self, _: Uuid, _: Vec<u8>) {}
 
-    async fn on_message_close(
-        &mut self,
-        session_id: Uuid,
-        frame: Option<CloseFrame<'static>>,
-    ) {
+    async fn on_message_close(&mut self, session_id: Uuid, frame: Option<CloseFrame<'static>>) {
         //fixme: this could should be removed after the deprecation of
         // self::on_close() for WS Close Message processing
-        self.on_close(session_id, WebSocketMessage::Close(frame)).await;
+        self.on_close(session_id, WebSocketMessage::Close(frame))
+            .await;
     }
 
     async fn on_close(&mut self, session_id: Uuid, msg: WebSocketMessage);
