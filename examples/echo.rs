@@ -45,13 +45,12 @@ pub struct EchoServer {
 impl WebSocketHandler for EchoServer {
     async fn on_open(&mut self, session_id: Uuid) {
         info!("new connection open with id: {}", session_id);
-        self.app
-            .session(session_id)
-            .await
-            .and_then(|s|
-                s.send(WebSocketMessage::Text(String::from("Welcome to Echo server!")))
-                    .ok()
-            );
+        self.app.session(session_id).await.and_then(|s| {
+            s.send(WebSocketMessage::Text(String::from(
+                "Welcome to Echo server!",
+            )))
+            .ok()
+        });
     }
 
     async fn on_message(&mut self, session_id: Uuid, msg: WebSocketMessage) {
