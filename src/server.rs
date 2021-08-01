@@ -1,5 +1,5 @@
-use crate::endpoints::Endpoints;
-use crate::service::RequestType;
+use crate::endpoints::{Endpoints, HandleWeb};
+use crate::service::{RequestType, WebConnWrapper};
 use crate::websocket::{ConnectionContext, WebSocketMessage, WebSocketSession};
 use crate::{service, spawn, websocket, MetricsMetadata, Request, SessionMessage};
 use async_tungstenite::tokio::TokioAdapter;
@@ -39,9 +39,10 @@ impl AppContext {
 
     pub async fn session(&self, id: Uuid) -> Option<WebSocketSession> {
         let (tx, rx) = channel();
-        let _ = self
-            .tx
-            .send(Command::WsSession(SessionMessage::Get(id, Some(tx))));
+        self.tx
+            .send(Command::WsSession(SessionMessage::Get(id, Some(tx))))
+            .ok();
+
         match rx.await {
             Ok(data) => data,
             Err(_) => None,
@@ -77,7 +78,6 @@ impl Server {
 
         let (socket_tx, mut socket_rx) = unbounded_channel::<(Uuid, WebSocketMessage)>();
         let (service_tx, service_rx) = unbounded_channel::<RequestType>();
-        //let (command_tx, mut command_rx) = unbounded_channel::<Command>();
         let (command_tx, mut command_rx) = channels;
 
         let server = Self {
@@ -159,7 +159,8 @@ impl Server {
 
         tracing::trace!("adding session: {:?}, for path: {}", session_id, path);
         if self.sessions_tx.send(SessionMessage::Add(session)).is_ok() {
-            self.endpoints.on_open(session_id, path.as_str()).await;
+            self.endpoints
+                .handle(path.as_str(), HandleWeb::SocketOpen(session_id));
         }
     }
 
@@ -168,7 +169,15 @@ impl Server {
         &self,
         request: Request<Body>,
     ) -> Arc<hyper::Result<Response<Body>>> {
-        self.endpoints.handle_web_request(request).await
+        let (tx, mut rx) = unbounded_channel::<Arc<hyper::Result<Response<Body>>>>();
+        let path = request.uri().path().to_string();
+        let wrapper = WebConnWrapper::new(request, tx);
+        self.endpoints.handle(&path, HandleWeb::Request(wrapper));
+
+        match rx.recv().await {
+            Some(t) => t,
+            None => unreachable!("Ups, we should not get here. tx dropped already"),
+        }
     }
 
     pub async fn bind(self, addrs: SocketAddr) -> hyper::Result<()> {
@@ -210,8 +219,8 @@ impl Server {
         let path = session.context().path();
         let is_close = message.is_close();
         self.endpoints
-            .on_message(session_id, path.as_str(), message)
-            .await;
+            .handle(path.as_str(), HandleWeb::SocketMessage(session_id, message));
+
         if is_close {
             self.remove_session(session_id).await;
         }

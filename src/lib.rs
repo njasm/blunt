@@ -46,12 +46,15 @@ pub struct MetricsMetadata {
 
 #[cfg(test)]
 mod tests {
+    use tokio::sync::mpsc::unbounded_channel;
+
     fn test_send_sync<T: Send + Sync>(_server: &T) {}
 
     #[tokio::test]
     async fn test_server_is_send_and_sync() {
         let endpoints = crate::Endpoints::default();
-        let server = crate::Server::new(endpoints);
+        let app_ctx_tuple = unbounded_channel();
+        let server = crate::server::Server::new(endpoints, app_ctx_tuple);
 
         test_send_sync(&server);
         assert!(true);

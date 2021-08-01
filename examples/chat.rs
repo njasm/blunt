@@ -37,11 +37,14 @@ pub struct ChatServer(UserCollection, AppContext);
 
 impl ChatServer {
     async fn broadcast(&mut self, except_id: Uuid, msg: WebSocketMessage) {
-        self.0.read().await.iter().for_each(|entry| {
-            if entry.0 != &except_id {
+        self.0
+            .read()
+            .await
+            .iter()
+            .filter(|&entry| entry.0 != &except_id)
+            .for_each(|entry| {
                 let _ = entry.1.send(msg.clone());
-            }
-        });
+            });
     }
 }
 
@@ -53,7 +56,7 @@ impl WebSocketHandler for ChatServer {
             self.0.write().await.insert(ws.id(), ws.channel());
         }
 
-        ws.send(WebSocketMessage::Text(String::from("Welcome!")))
+        ws.send(WebSocketMessage::Text(String::from(format!("Welcome {}!", ws.id()))))
             .expect("Unable to send message");
 
         let msg = format!("User {} joined the chat.", ws.id());

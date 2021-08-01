@@ -29,7 +29,7 @@ pub(crate) async fn register_recv_ws_message_handling(
             while let Some(result) = ws_session_rx.next().await {
                 match result {
                     Ok(msg) => {
-                        let _ = server_socket_tx.send((session_id, msg));
+                        server_socket_tx.send((session_id, msg)).ok();
                     }
                     Err(e) => {
                         let error_message = format!("Receive from websocket: {:?}", e);
@@ -41,7 +41,9 @@ pub(crate) async fn register_recv_ws_message_handling(
                         };
 
                         warn!("Dropping channel 'ws_session_rx' -> server::recv()");
-                        let _ = server_socket_tx.send((session_id, Message::Close(Some(frame))));
+                        server_socket_tx
+                            .send((session_id, Message::Close(Some(frame))))
+                            .ok();
                         return;
                     }
                 }

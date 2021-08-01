@@ -76,7 +76,7 @@ impl Service<Request<Body>> for Router {
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
         // favicon.ico
-        if req.uri().path() == "/favicon.ico" {
+        if req.uri().path().to_lowercase() == "/favicon.ico" {
             return Box::pin(async {
                 Ok(Response::builder()
                     .status(StatusCode::NO_CONTENT)

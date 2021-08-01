@@ -1,7 +1,7 @@
 use async_tungstenite::tungstenite::http::Request;
 use blunt::server::AppContext;
 use blunt::webhandler::WebHandler;
-use blunt::websocket::{WebSocketHandler, WebSocketMessage, WebSocketSession};
+use blunt::websocket::{WebSocketHandler, WebSocketMessage};
 use hyper::header::CONTENT_TYPE;
 use hyper::http::HeaderValue;
 use hyper::{Body, Response};
