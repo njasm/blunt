@@ -48,11 +48,8 @@ impl AppContext {
 
     pub async fn metrics(&self) -> Option<MetricsMetadata> {
         let (tx, rx) = channel();
-        let _ = self.tx.send(Command::Metrics(tx));
-        match rx.await {
-            Ok(data) => Some(data),
-            Err(_) => None,
-        }
+        self.tx.send(Command::Metrics(tx)).ok();
+        rx.await.ok()
     }
 }
 
@@ -121,7 +118,9 @@ impl Server {
         let cmd_tx2 = server.command_tx.clone();
         spawn(async move {
             while let Some((id, msg)) = socket_rx.recv().await {
-                let _ = cmd_tx2.send(Command::WebSocketMessageReceiving(id, msg));
+                cmd_tx2
+                    .send(Command::WebSocketMessageReceiving(id, msg))
+                    .ok();
             }
         });
 
@@ -184,9 +183,9 @@ impl Server {
     /// Removed a web socket session from the server
     #[tracing::instrument(level = "trace", skip(self, session_id))]
     async fn remove_session(&self, session_id: Uuid) {
-        let _ = self
-            .sessions_tx
-            .send(SessionMessage::Remove(session_id, None));
+        self.sessions_tx
+            .send(SessionMessage::Remove(session_id, None))
+            .ok();
     }
 
     /// Receive message from the web socket connection
@@ -233,7 +232,7 @@ async fn register_sessions_handle_task(mut rx: UnboundedReceiver<SessionMessage>
             SessionMessage::Get(id, reply) => {
                 if let Some(s) = sessions.get(&id) {
                     if let Some(channel) = reply {
-                        let _ = channel.send(Some(s.clone()));
+                        channel.send(Some(s.clone())).ok();
                     }
                 }
             }
@@ -258,10 +257,12 @@ async fn register_sessions_handle_task(mut rx: UnboundedReceiver<SessionMessage>
                     }
                 }
 
-                let _ = reply.send(MetricsMetadata {
-                    total_sessions: total,
-                    path_counter: map,
-                });
+                reply
+                    .send(MetricsMetadata {
+                        total_sessions: total,
+                        path_counter: map,
+                    })
+                    .ok();
             }
         };
     }
