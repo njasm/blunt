@@ -32,7 +32,7 @@ pub(crate) async fn register_recv_ws_message_handling(
                         server_socket_tx.send((session_id, msg)).ok();
                     }
                     Err(e) => {
-                        let error_message = format!("Receive from websocket: {:?}", e);
+                        let error_message = format!("Receiving from websocket: {:?}", e);
                         error!("{}", error_message);
 
                         let frame = CloseFrame {
@@ -40,7 +40,6 @@ pub(crate) async fn register_recv_ws_message_handling(
                             reason: std::borrow::Cow::Owned(error_message),
                         };
 
-                        warn!("Dropping channel 'ws_session_rx' -> server::recv()");
                         server_socket_tx
                             .send((session_id, Message::Close(Some(frame))))
                             .ok();
@@ -48,8 +47,6 @@ pub(crate) async fn register_recv_ws_message_handling(
                     }
                 }
             }
-
-            warn!("we are leaving the gibson - tx channel dropped");
         }
         .instrument(trace_span!("recv_from_ws_task")),
     );
@@ -64,14 +61,11 @@ pub(crate) async fn register_send_to_ws_message_handling(
         async move {
             while let Some(result) = rx.recv().await {
                 trace!("Sending to websocket: {:?}", result);
-                if let Err(e) = ws_session_tx.send(result).await {
-                    warn!("Sending to websocket: {:?}", e);
+                if ws_session_tx.send(result).await.is_err() {
                     warn!("Dropping channel server -> 'ws_session_rx'");
                     return;
                 }
             }
-
-            warn!("we are leaving the gibson - rx channel dropped");
         }
         .instrument(trace_span!("send_to_ws_task")),
     );

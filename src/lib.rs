@@ -35,6 +35,9 @@ pub(crate) enum SessionMessage {
     Remove(Uuid, Option<Sender<Option<WebSocketSession>>>),
     /// Returns a cloned Web Socket Session identified by the Uuid
     Get(Uuid, Option<Sender<Option<WebSocketSession>>>),
+    /// Returns the Path that a Web Socket Session is connected to
+    GetPath(Uuid, Sender<Option<String>>),
+    /// Returns basic metric data about global total sessions connected, and per path
     Metrics(Sender<MetricsMetadata>),
 }
 

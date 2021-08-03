@@ -43,10 +43,7 @@ impl AppContext {
             .send(Command::WsSession(SessionMessage::Get(id, Some(tx))))
             .ok();
 
-        match rx.await {
-            Ok(data) => data,
-            Err(_) => None,
-        }
+        rx.await.ok()?
     }
 
     pub async fn metrics(&self) -> Option<MetricsMetadata> {
@@ -198,25 +195,18 @@ impl Server {
         let (tx, rx) = channel();
         if self
             .sessions_tx
-            .send(SessionMessage::Get(session_id, Some(tx)))
+            .send(SessionMessage::GetPath(session_id, tx))
             .is_err()
         {
             tracing::error!("Unable to request WebSocketSession from task");
             return;
         }
 
-        let session = match rx.await {
-            Ok(s) => {
-                if let Some(s) = s {
-                    s
-                } else {
-                    return;
-                }
-            }
-            Err(_) => return,
+        let path = match rx.await {
+            Ok(Some(path)) => path,
+            _ => return,
         };
 
-        let path = session.context().path();
         let is_close = message.is_close();
         self.endpoints
             .handle(path.as_str(), HandleWeb::SocketMessage(session_id, message));
@@ -235,19 +225,23 @@ async fn register_sessions_handle_task(mut rx: UnboundedReceiver<SessionMessage>
                 sessions.insert(ws.id(), ws);
                 tracing::debug!("After insert, total sessions: {}", sessions.len());
             }
+            SessionMessage::GetPath(id, reply) => {
+                let path = sessions.get(&id).map(|p| p.context().path());
+
+                reply.send(path).ok();
+            }
             SessionMessage::Get(id, reply) => {
                 if let Some(s) = sessions.get(&id) {
                     if let Some(channel) = reply {
                         let _ = channel.send(Some(s.clone()));
                     }
-                };
+                }
             }
             SessionMessage::Remove(id, reply) => {
                 if let Some(s) = sessions.remove(&id) {
                     if let Some(channel) = reply {
-                        let _ = channel.send(Some(s.clone()));
+                        channel.send(Some(s)).ok();
                     }
-                    drop(s);
                 }
 
                 tracing::debug!("After remove, total sessions: {}", sessions.len());

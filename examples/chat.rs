@@ -43,7 +43,7 @@ impl ChatServer {
             .iter()
             .filter(|&entry| entry.0 != &except_id)
             .for_each(|entry| {
-                let _ = entry.1.send(msg.clone());
+                entry.1.send(msg.clone()).ok();
             });
     }
 }
@@ -63,7 +63,8 @@ impl WebSocketHandler for ChatServer {
         self.broadcast(ws.id(), WebSocketMessage::Text(msg)).await;
     }
 
-    async fn on_message_text(&mut self, session_id: Uuid, msg: String) {
+    async fn on_message_text(&mut self, session_id: Uuid, mut msg: String) {
+        msg = format!("User {} said: {}", session_id, msg);
         self.broadcast(session_id, WebSocketMessage::Text(msg))
             .await;
     }
