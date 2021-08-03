@@ -1,4 +1,4 @@
-mod rt;
+pub mod rt;
 mod service;
 
 pub use rt::task::spawn;
@@ -49,7 +49,7 @@ pub struct MetricsMetadata {
 
 #[cfg(test)]
 mod tests {
-    use tokio::sync::mpsc::unbounded_channel;
+    use crate::rt::mpsc::unbounded_channel;
 
     fn test_send_sync<T: Send + Sync>(_server: &T) {}
 

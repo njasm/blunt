@@ -15,11 +15,11 @@ use std::task::{Context, Poll};
 use tokio::net::TcpStream;
 
 use crate::endpoints::ForPath;
+use crate::rt::mpsc::{unbounded_channel, UnboundedSender};
 use crate::server::Server;
 use crate::{spawn, Body, Request, Response, StatusCode};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 pub(crate) struct Router {
     tx: UnboundedSender<RequestType>,

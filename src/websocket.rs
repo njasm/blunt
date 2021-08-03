@@ -4,6 +4,7 @@ use core::fmt::Debug;
 use async_trait::async_trait;
 use std::net::SocketAddr;
 
+use crate::rt::mpsc::{error::SendError, UnboundedReceiver, UnboundedSender};
 use crate::spawn;
 use async_tungstenite::tokio::TokioAdapter;
 use async_tungstenite::tungstenite::Message;
@@ -11,8 +12,6 @@ use async_tungstenite::WebSocketStream;
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc::error::SendError;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tracing::{error, trace, trace_span, warn};
 use tracing_futures::Instrument;
 use uuid::Uuid;

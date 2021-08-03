@@ -27,7 +27,7 @@ async fn main() -> hyper::Result<()> {
     // just what's actually needed
     let web = HelloWorldWeb::default();
     ::blunt::builder()
-        .for_path_with_ctor("/echo", |app| EchoServer { app })
+        .for_path_with_ctor("/echo", |ctx| EchoServer { ctx })
         .for_web_path("/world", web)
         .build()
         .bind("127.0.0.1:3000".parse().expect("Invalid Socket Addr"))
@@ -38,14 +38,14 @@ async fn main() -> hyper::Result<()> {
 
 #[derive(Debug)]
 pub struct EchoServer {
-    app: AppContext,
+    ctx: AppContext,
 }
 
 #[blunt::async_trait]
 impl WebSocketHandler for EchoServer {
     async fn on_open(&mut self, session_id: Uuid) {
         info!("new connection open with id: {}", session_id);
-        self.app.session(session_id).await.and_then(|s| {
+        self.ctx.session(session_id).await.and_then(|s| {
             s.send(WebSocketMessage::Text(String::from(
                 "Welcome to Echo server!",
             )))
@@ -59,7 +59,7 @@ impl WebSocketHandler for EchoServer {
             session_id, msg
         );
 
-        self.app
+        self.ctx
             .session(session_id)
             .await
             .and_then(|s| s.send(msg).ok());

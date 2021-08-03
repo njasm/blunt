@@ -4,7 +4,7 @@ use crate::websocket::WebSocketHandler;
 use crate::{server::Server, Endpoints};
 
 use crate::endpoints::Register;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use crate::rt::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 pub struct Builder {
     endpoints: Endpoints,
