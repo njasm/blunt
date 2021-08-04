@@ -1,29 +1,47 @@
+use blunt::rt::mpsc::UnboundedSender;
+use blunt::server::AppContext;
 use blunt::websocket::{WebSocketHandler, WebSocketMessage, WebSocketSession};
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
+use uuid::Uuid;
 
-#[derive(Debug, Default)]
-pub struct EchoServer;
+type UserCollection = Arc<RwLock<HashMap<Uuid, UnboundedSender<WebSocketMessage>>>>;
+fn user_collection() -> UserCollection {
+    Arc::new(RwLock::new(HashMap::new()))
+}
+
+#[derive(Debug)]
+pub struct EchoServer(AppContext, UserCollection);
 
 #[blunt::async_trait]
 impl WebSocketHandler for EchoServer {
-    async fn on_open(&mut self, _ws: &WebSocketSession) {}
-    async fn on_message(&mut self, ws: &WebSocketSession, msg: WebSocketMessage) {
-        match ws.send(msg) {
-            Ok(_) => (),
-            Err(e) => eprintln!("Unable to send: {:?}", e),
-        };
+    async fn on_open(&mut self, session_id: Uuid) {
+        if let Some(ws) = self.0.session(session_id).await {
+            self.1.write().await.insert(ws.id(), ws.channel());
+        }
     }
 
-    async fn on_close(&mut self, _ws: &WebSocketSession, _msg: WebSocketMessage) {}
+    async fn on_message(&mut self, session_id: Uuid, msg: WebSocketMessage) {
+        if let Some(ws) = self.1.read().await.get(&session_id) {
+            if let Err(e) = ws.send(msg) {
+                eprintln!("Unable to send: {:?}", e);
+            }
+        }
+    }
+
+    async fn on_close(&mut self, session_id: Uuid, msg: WebSocketMessage) {
+        self.1.write().await.remove(&session_id);
+    }
 }
 
 fn start_echo_server() -> JoinHandle<()> {
     tokio::spawn(async {
-        let handler = EchoServer::default();
         let _ = ::blunt::builder()
-            .for_path("/echo", handler)
+            .for_path_with_ctor("/echo", |ctx| EchoServer(ctx, user_collection()))
             .build()
             .bind("127.0.0.1:9999".parse().expect("Invalid Socket Addr"))
             .await;
@@ -141,11 +159,9 @@ fn single_echo_benchmark(c: &mut Criterion) {
 
 fn start_multi_echo_server() -> JoinHandle<()> {
     tokio::spawn(async {
-        let handler = EchoServer::default();
-        let handler2 = EchoServer::default();
         let _ = ::blunt::builder()
-            .for_path("/echo", handler)
-            .for_path("/echo2", handler2)
+            .for_path_with_ctor("/echo", |ctx| EchoServer(ctx, user_collection()))
+            .for_path_with_ctor("/echo2", |ctx| EchoServer(ctx, user_collection()))
             .build()
             .bind("127.0.0.1:9999".parse().expect("Invalid Socket Addr"))
             .await;

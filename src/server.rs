@@ -40,7 +40,7 @@ impl AppContext {
     pub async fn session(&self, id: Uuid) -> Option<WebSocketSession> {
         let (tx, rx) = channel();
         self.tx
-            .send(Command::WsSession(SessionMessage::Get(id, Some(tx))))
+            .send(Command::WsSession(SessionMessage::Get(id, tx)))
             .ok();
 
         rx.await.ok()?
@@ -226,14 +226,11 @@ async fn register_sessions_handle_task(mut rx: UnboundedReceiver<SessionMessage>
             }
             SessionMessage::GetPath(id, reply) => {
                 let path = sessions.get(&id).map(|p| p.context().path());
-
                 reply.send(path).ok();
             }
             SessionMessage::Get(id, reply) => {
                 if let Some(s) = sessions.get(&id) {
-                    if let Some(channel) = reply {
-                        channel.send(Some(s.clone())).ok();
-                    }
+                    reply.send(Some(s.clone())).ok();
                 }
             }
             SessionMessage::Remove(id, reply) => {
