@@ -81,8 +81,8 @@ pub(crate) enum SessionMessage {
 
 #[derive(Clone, Debug)]
 pub struct MetricsMetadata {
-    total_sessions: usize,
-    path_counter: HashMap<String, usize>,
+    pub total_sessions: usize,
+    pub path_counter: HashMap<String, usize>,
 }
 
 #[cfg(test)]
