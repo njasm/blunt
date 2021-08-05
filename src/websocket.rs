@@ -39,6 +39,10 @@ pub(crate) async fn register_recv_ws_message_handling(
                             reason: std::borrow::Cow::Owned(error_message),
                         };
 
+                        // FIXME: this is conceptually wrong, this is not a received
+                        // msg from the client, but we are using one to close the
+                        // connection state internally. we should handle this gracefully
+                        // and in a correct way.
                         server_socket_tx
                             .send((session_id, Message::Close(Some(frame))))
                             .ok();
@@ -46,6 +50,15 @@ pub(crate) async fn register_recv_ws_message_handling(
                     }
                 }
             }
+
+            // guarantee that we remove the session from the sessions task
+            // FIXME: this is conceptually wrong, this is not a received
+            // msg from the client, but we are using one to close the
+            // connection state internally. we should handle this gracefully
+            // and in a correct way.
+            server_socket_tx
+                .send((session_id, Message::Close(None)))
+                .ok();
         }
         .instrument(trace_span!("recv_from_ws_task")),
     );
