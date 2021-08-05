@@ -2,7 +2,10 @@ use crate::endpoints::{Endpoints, HandleWeb};
 use crate::rt::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use crate::service::{RequestType, WebConnWrapper};
 use crate::websocket::{ConnectionContext, WebSocketMessage, WebSocketSession};
-use crate::{service, spawn, websocket, MetricsMetadata, Request, SessionMessage};
+use crate::{
+    service, spawn, websocket, FilterFn, MetricsMetadata, Request, SessionIteratorWrap,
+    SessionMessage,
+};
 use async_tungstenite::tokio::TokioAdapter;
 use async_tungstenite::WebSocketStream;
 use futures::StreamExt;
@@ -46,6 +49,27 @@ impl AppContext {
         rx.await.ok()?
     }
 
+    pub async fn sessions_filter<F: 'static>(&self, func: F) -> SessionIteratorWrap
+    where
+        F: Fn(WebSocketSession) -> bool + Send + Sync + 'static,
+    {
+        let (tx, rx) = channel();
+        let path = self.path.clone();
+        let message = SessionMessage::GetByFilter(path, FilterFn::new(Arc::new(func)), tx);
+        self.tx.send(Command::WsSession(message)).ok();
+
+        rx.await.unwrap()
+    }
+
+    pub async fn remove_session(&self, id: Uuid) -> Option<WebSocketSession> {
+        let (tx, rx) = channel();
+        self.tx
+            .send(Command::WsSession(SessionMessage::Remove(id, Some(tx))))
+            .ok();
+
+        rx.await.ok()?
+    }
+
     pub async fn metrics(&self) -> Option<MetricsMetadata> {
         let (tx, rx) = channel();
         self.tx.send(Command::Metrics(tx)).ok();
@@ -72,7 +96,7 @@ impl Server {
 
         let (socket_tx, mut socket_rx) = unbounded_channel::<(Uuid, WebSocketMessage)>();
         let (service_tx, service_rx) = unbounded_channel::<RequestType>();
-        let (command_tx, mut command_rx) = channels;
+        let (command_tx, command_rx) = channels;
 
         let server = Self {
             endpoints,
@@ -83,37 +107,7 @@ impl Server {
         };
 
         let server2 = server.clone();
-        spawn(async move {
-            while let Some(cmd) = command_rx.recv().await {
-                match cmd {
-                    Command::WsSession(sess_msg) => {
-                        server2.sessions_tx.send(sess_msg).ok();
-                    }
-                    Command::Metrics(channel) => {
-                        server2
-                            .sessions_tx
-                            .send(SessionMessage::Metrics(channel))
-                            .ok();
-                    }
-                    Command::WebSocketMessageReceiving(id, msg) => {
-                        server2.recv(id, msg).await;
-                    }
-                    Command::Handle(request_type) => match request_type {
-                        RequestType::Socket(wrapper) => {
-                            let (ws, ctx) = wrapper.into_parts();
-                            server2.handle_new_session(ws, ctx).await;
-                        }
-                        RequestType::Web(wrapper) => {
-                            let (request, channel) = wrapper.into_parts();
-                            let result = server2.handle_web_request(request).await;
-                            if channel.send(result).is_err() {
-                                tracing::error!("Send Error!")
-                            }
-                        }
-                    },
-                }
-            }
-        });
+        spawn(register_server_command_handle_task(server2, command_rx));
 
         let cmd_tx2 = server.command_tx.clone();
         spawn(async move {
@@ -228,6 +222,25 @@ async fn register_sessions_handle_task(mut rx: UnboundedReceiver<SessionMessage>
                 let path = sessions.get(&id).map(|p| p.context().path());
                 reply.send(path).ok();
             }
+            SessionMessage::GetByFilter(path, filter, reply) => {
+                let f = filter.into_inner();
+                #[allow(clippy::map_clone)]
+                let result = sessions
+                    .iter()
+                    .map(|ws| ws.1)
+                    .filter(|s| {
+                        if s.context().path() != path {
+                            false
+                        } else {
+                            let ws = (*s).clone();
+                            f(ws)
+                        }
+                    })
+                    .map(|ws| ws.clone())
+                    .collect::<Vec<WebSocketSession>>();
+
+                reply.send(SessionIteratorWrap::new(result)).ok();
+            }
             SessionMessage::Get(id, reply) => {
                 if let Some(s) = sessions.get(&id) {
                     reply.send(Some(s.clone())).ok();
@@ -265,6 +278,41 @@ async fn register_sessions_handle_task(mut rx: UnboundedReceiver<SessionMessage>
     }
 }
 
+async fn register_server_command_handle_task(
+    server: Server,
+    mut command_rx: UnboundedReceiver<Command>,
+) {
+    while let Some(cmd) = command_rx.recv().await {
+        match cmd {
+            Command::WsSession(sess_msg) => {
+                server.sessions_tx.send(sess_msg).ok();
+            }
+            Command::Metrics(channel) => {
+                server
+                    .sessions_tx
+                    .send(SessionMessage::Metrics(channel))
+                    .ok();
+            }
+            Command::WebSocketMessageReceiving(id, msg) => {
+                server.recv(id, msg).await;
+            }
+            Command::Handle(request_type) => match request_type {
+                RequestType::Socket(wrapper) => {
+                    let (ws, ctx) = wrapper.into_parts();
+                    server.handle_new_session(ws, ctx).await;
+                }
+                RequestType::Web(wrapper) => {
+                    let (request, channel) = wrapper.into_parts();
+                    let result = server.handle_web_request(request).await;
+                    if channel.send(result).is_err() {
+                        tracing::error!("Send Error!")
+                    }
+                }
+            },
+        }
+    }
+}
+
 async fn register_service_handle_task(
     tx: UnboundedSender<Command>,
     mut service_rx: UnboundedReceiver<RequestType>,
@@ -274,5 +322,92 @@ async fn register_service_handle_task(
             Some(request_type) => tx.send(Command::Handle(request_type)).ok(),
             None => return,
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::rt::mpsc::unbounded_channel;
+    use crate::server::{AppContext, Command};
+    use crate::websocket::{ConnectionContext, WebSocketSession};
+    use crate::SessionMessage;
+    use hyper::HeaderMap;
+
+    #[tokio::test]
+    async fn test_app_context_sessions_filter() {
+        // FIXME: this is an integration test, should be moved to tests folder
+        let (ws_tx, _ws_rx) = unbounded_channel();
+        let data = [
+            WebSocketSession::new(
+                ConnectionContext::new(
+                    None,
+                    HeaderMap::new(),
+                    String::from("query_one"),
+                    String::from("path"),
+                ),
+                ws_tx.clone(),
+            ),
+            WebSocketSession::new(
+                ConnectionContext::new(
+                    None,
+                    HeaderMap::new(),
+                    String::from("query_two"),
+                    String::from("path"),
+                ),
+                ws_tx.clone(),
+            ),
+            WebSocketSession::new(
+                ConnectionContext::new(
+                    None,
+                    HeaderMap::new(),
+                    String::from("query_three"),
+                    String::from("path"),
+                ),
+                ws_tx,
+            ),
+        ];
+
+        let endpoints = crate::Endpoints::default();
+        let app_ctx_tuple = unbounded_channel::<Command>();
+        let app_ctx = AppContext::new(app_ctx_tuple.0.clone(), String::from("path"));
+
+        let server = crate::server::Server::new(endpoints, app_ctx_tuple);
+        server
+            .sessions_tx
+            .send(SessionMessage::Add(data[0].clone()))
+            .ok();
+        server
+            .sessions_tx
+            .send(SessionMessage::Add(data[1].clone()))
+            .ok();
+        server
+            .sessions_tx
+            .send(SessionMessage::Add(data[2].clone()))
+            .ok();
+
+        let filter = |ws: WebSocketSession| {
+            ws.context().query().unwrap_or_default() == String::from("query_three")
+        };
+
+        let result = app_ctx.sessions_filter(filter).await;
+        let result = result.into_inner();
+
+        // single session assertion
+        assert_eq!(result.len(), 1);
+        for ws in result {
+            assert_eq!(ws.context().query().unwrap_or_default(), "query_three");
+        }
+
+        // multi session assertion
+        let set = ["query_one", "query_two"];
+        let filter =
+            move |ws: WebSocketSession| set.contains(&&*ws.context().query().unwrap_or_default());
+        let result = app_ctx.sessions_filter(filter).await;
+        let result = result.into_inner();
+
+        assert_eq!(result.len(), 2);
+        for ws in result {
+            assert!(set.contains(&&*ws.context().query().unwrap_or_default()));
+        }
     }
 }
