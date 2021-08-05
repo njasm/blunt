@@ -1,4 +1,4 @@
-use crate::endpoints::{Endpoints, HandleWeb};
+use crate::endpoints::{Endpoints, ForPath, HandleWeb};
 use crate::rt::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use crate::service::{RequestType, WebConnWrapper};
 use crate::websocket::{ConnectionContext, WebSocketMessage, WebSocketSession};
@@ -288,10 +288,23 @@ async fn register_server_command_handle_task(
                 server.sessions_tx.send(sess_msg).ok();
             }
             Command::Metrics(channel) => {
-                server
-                    .sessions_tx
-                    .send(SessionMessage::Metrics(channel))
-                    .ok();
+                let paths = server.endpoints.get_paths();
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                server.sessions_tx.send(SessionMessage::Metrics(tx)).ok();
+
+                let mut metrics = rx.await.unwrap();
+                for path in paths.iter() {
+                    match *path.1 {
+                        ForPath::Web => continue,
+                        ForPath::Socket => {
+                            if !metrics.path_counter.contains_key(*path.0) {
+                                metrics.path_counter.insert(String::from(*path.0), 0);
+                            }
+                        }
+                    }
+                }
+
+                channel.send(metrics).ok();
             }
             Command::WebSocketMessageReceiving(id, msg) => {
                 server.recv(id, msg).await;
