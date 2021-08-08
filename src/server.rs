@@ -416,11 +416,17 @@ mod tests {
         let filter =
             move |ws: WebSocketSession| set.contains(&&*ws.context().query().unwrap_or_default());
         let result = app_ctx.sessions_filter(filter).await;
-        let result = result.into_inner();
+        let mut result = result.into_inner();
 
+        // exact len of requested and in the result
         assert_eq!(result.len(), 2);
-        for ws in result {
+        for ws in result.iter() {
             assert!(set.contains(&&*ws.context().query().unwrap_or_default()));
         }
+
+        // exact ones: by removing the set values from the result;
+        // the end result must have a len of 0.
+        result.retain(move |ws| !set.contains(&&*ws.context().query().unwrap_or_default()));
+        assert_eq!(result.len(), 0);
     }
 }
