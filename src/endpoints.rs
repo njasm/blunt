@@ -82,8 +82,7 @@ impl Endpoints {
         result
     }
 
-    #[tracing::instrument(level = "trace")]
-    pub(crate) async fn contains_path(&self, key: &str) -> bool {
+    pub(crate) fn contains_path(&self, key: &str) -> bool {
         self.channels.contains_key(key)
     }
 }
@@ -117,11 +116,11 @@ mod tests {
         let mut e = crate::Endpoints::default();
         let key = "ws";
 
-        assert_eq!(e.contains_path(key).await, false);
+        assert_eq!(e.contains_path(key), false);
 
         let h = Handler::default();
         e.register(key, Register::WebSocket(Box::new(h)));
 
-        assert_eq!(e.contains_path(key).await, true);
+        assert_eq!(e.contains_path(key), true);
     }
 }
