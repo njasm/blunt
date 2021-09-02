@@ -81,10 +81,6 @@ impl Endpoints {
 
         result
     }
-
-    pub(crate) fn contains_path(&self, key: &str) -> bool {
-        self.channels.contains_key(key)
-    }
 }
 
 impl Default for Endpoints {
