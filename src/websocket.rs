@@ -97,7 +97,7 @@ pub trait WebSocketHandler: Sync + Send + Debug {
             WebSocketMessage::Text(s) => self.on_message_text(session_id, s).await,
             WebSocketMessage::Binary(b) => self.on_message_binary(session_id, b).await,
             WebSocketMessage::Ping(b) => self.on_message_ping(session_id, b).await,
-            WebSocketMessage::Pong(b) => self.on_message_ping(session_id, b).await,
+            WebSocketMessage::Pong(b) => self.on_message_pong(session_id, b).await,
             WebSocketMessage::Close(frame) => self.on_message_close(session_id, frame).await,
         };
     }

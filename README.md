@@ -14,31 +14,44 @@ The world famous example, echo server
 ```rust
 #[tokio::main]
 async fn main() -> Result<()> {
-    let handler = EchoServer::default();
     ::blunt::builder()
-        .for_path("/echo", handler)
+        .for_path_with_ctor("/echo", |ctx| EchoServer { ctx })
         .build()
-        .bind("127.0.0.1:3000".parse().expect("Socket Addr"))
-        .await?
+        .bind("127.0.0.1:3000".parse().expect("Invalid Socket Addr"))
+        .await?;
+
+    Ok(())
     
     // now connect your clients to http://127.0.0.1:3000/echo and say something!
 }
 
 #[derive(Debug, Default)]
-pub struct EchoServer;
+pub struct EchoServer {
+    ctx: AppContext,
+}
 
 #[blunt::async_trait]
 impl WebSocketHandler for EchoServer {
-    async fn on_open(&mut self, ws: &WebSocketSession) {
-        info!("new connection open with id: {}", ws.id());
+    async fn on_open(&mut self, session_id: Uuid) {
+        self.ctx
+            .session(session_id)
+            .await
+            .and_then(|s| {
+                s.send(WebSocketMessage::Text(String::from(
+                    "Welcome to Echo server!",
+                ))).ok()
+            });
     }
 
-    async fn on_message(&mut self, ws: &WebSocketSession, msg: WebSocketMessage) {
-        ws.send(msg).expect("Unable to send message");
+    async fn on_message(&mut self, session_id: Uuid, msg: WebSocketMessage) {
+        self.ctx
+            .session(session_id)
+            .await
+            .and_then(|s| s.send(msg).ok());
     }
 
-    async fn on_close(&mut self, ws: &WebSocketSession, _msg: WebSocketMessage) {
-        info!("connection closed for session id {}", ws.id());
+    async fn on_close(&mut self, session_id: Uuid, _msg: WebSocketMessage) {
+        info!("connection closed for session id {}", session_id);
     }
 }
 ```
