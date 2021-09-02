@@ -112,11 +112,11 @@ mod tests {
         let mut e = crate::Endpoints::default();
         let key = "ws";
 
-        assert_eq!(e.contains_path(key), false);
+        assert_eq!(e.get_paths().contains_key(key), false);
 
         let h = Handler::default();
         e.register(key, Register::WebSocket(Box::new(h)));
 
-        assert_eq!(e.contains_path(key), true);
+        assert_eq!(e.get_paths().contains_key(key), true);
     }
 }
