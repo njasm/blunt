@@ -105,7 +105,7 @@ impl Service<Request<Body>> for Router {
                     let (parts, _) = match tungstenite_create_response(&r) {
                         Ok(resp) => resp.into_parts(),
                         Err(e) => {
-                            tracing::error!("{:?}:{}", e, e);
+                            tracing::error!("{:?}", e);
                             return Box::pin(async {
                                 Ok(Response::builder()
                                     .status(StatusCode::BAD_REQUEST)
@@ -171,7 +171,7 @@ impl HttpService {
     pub(crate) async fn serve(self, addrs: SocketAddr) -> HyperServer<AddrIncoming, HttpService> {
         let incoming = AddrIncoming::bind(&addrs).unwrap();
         hyper::server::Builder::new(incoming, Http::new())
-            .http2_max_concurrent_streams(1024u32)
+            //.http2_max_concurrent_streams(1024u32)
             .serve(self)
     }
 }
