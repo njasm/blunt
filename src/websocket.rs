@@ -4,16 +4,14 @@ use core::fmt::Debug;
 use async_trait::async_trait;
 use std::net::SocketAddr;
 
+use crate::rt::mpsc::{error::SendError, UnboundedReceiver, UnboundedSender};
+use crate::spawn;
 use async_tungstenite::tokio::TokioAdapter;
-use async_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
-use async_tungstenite::tungstenite::protocol::CloseFrame;
 use async_tungstenite::tungstenite::Message;
 use async_tungstenite::WebSocketStream;
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc::error::SendError;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tracing::{error, trace, trace_span, warn};
 use tracing_futures::Instrument;
 use uuid::Uuid;
@@ -25,15 +23,15 @@ pub(crate) async fn register_recv_ws_message_handling(
     session_id: impl Into<Uuid>,
 ) {
     let session_id = session_id.into();
-    tokio::spawn(
+    spawn(
         async move {
             while let Some(result) = ws_session_rx.next().await {
                 match result {
                     Ok(msg) => {
-                        let _ = server_socket_tx.send((session_id, msg));
+                        server_socket_tx.send((session_id, msg)).ok();
                     }
                     Err(e) => {
-                        let error_message = format!("Receive from websocket: {:?}", e);
+                        let error_message = format!("Receiving from websocket: {:?}", e);
                         error!("{}", error_message);
 
                         let frame = CloseFrame {
@@ -41,14 +39,26 @@ pub(crate) async fn register_recv_ws_message_handling(
                             reason: std::borrow::Cow::Owned(error_message),
                         };
 
-                        warn!("Dropping channel 'ws_session_rx' -> server::recv()");
-                        let _ = server_socket_tx.send((session_id, Message::Close(Some(frame))));
+                        // FIXME: this is conceptually wrong, this is not a received
+                        // msg from the client, but we are using one to close the
+                        // connection state internally. we should handle this gracefully
+                        // and in a correct way.
+                        server_socket_tx
+                            .send((session_id, Message::Close(Some(frame))))
+                            .ok();
                         return;
                     }
                 }
             }
 
-            warn!("we are leaving the gibson - tx channel dropped");
+            // guarantee that we remove the session from the sessions task
+            // FIXME: this is conceptually wrong, this is not a received
+            // msg from the client, but we are using one to close the
+            // connection state internally. we should handle this gracefully
+            // and in a correct way.
+            server_socket_tx
+                .send((session_id, Message::Close(None)))
+                .ok();
         }
         .instrument(trace_span!("recv_from_ws_task")),
     );
@@ -59,18 +69,15 @@ pub(crate) async fn register_send_to_ws_message_handling(
     mut ws_session_tx: SplitSink<WebSocketStream<TokioAdapter<TcpStream>>, WebSocketMessage>,
     mut rx: UnboundedReceiver<WebSocketMessage>,
 ) {
-    tokio::spawn(
+    spawn(
         async move {
             while let Some(result) = rx.recv().await {
                 trace!("Sending to websocket: {:?}", result);
-                if let Err(e) = ws_session_tx.send(result).await {
-                    warn!("Sending to websocket: {:?}", e);
+                if ws_session_tx.send(result).await.is_err() {
                     warn!("Dropping channel server -> 'ws_session_rx'");
                     return;
                 }
             }
-
-            warn!("we are leaving the gibson - rx channel dropped");
         }
         .instrument(trace_span!("send_to_ws_task")),
     );
@@ -79,11 +86,35 @@ pub(crate) async fn register_send_to_ws_message_handling(
 /// Our Websocket Message
 pub type WebSocketMessage = async_tungstenite::tungstenite::protocol::Message;
 
+pub type CloseFrame<'t> = async_tungstenite::tungstenite::protocol::CloseFrame<'t>;
+pub type CloseCode = async_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+
 #[async_trait]
 pub trait WebSocketHandler: Sync + Send + Debug {
-    async fn on_open(&mut self, ws: &WebSocketSession);
-    async fn on_message(&mut self, ws: &WebSocketSession, msg: WebSocketMessage);
-    async fn on_close(&mut self, ws: &WebSocketSession, msg: WebSocketMessage);
+    async fn on_open(&mut self, session_id: Uuid);
+    async fn on_message(&mut self, session_id: Uuid, msg: WebSocketMessage) {
+        match msg {
+            WebSocketMessage::Text(s) => self.on_message_text(session_id, s).await,
+            WebSocketMessage::Binary(b) => self.on_message_binary(session_id, b).await,
+            WebSocketMessage::Ping(b) => self.on_message_ping(session_id, b).await,
+            WebSocketMessage::Pong(b) => self.on_message_pong(session_id, b).await,
+            WebSocketMessage::Close(frame) => self.on_message_close(session_id, frame).await,
+        };
+    }
+
+    async fn on_message_text(&mut self, _: Uuid, _: String) {}
+    async fn on_message_binary(&mut self, _: Uuid, _: Vec<u8>) {}
+    async fn on_message_ping(&mut self, _: Uuid, _: Vec<u8>) {}
+    async fn on_message_pong(&mut self, _: Uuid, _: Vec<u8>) {}
+
+    async fn on_message_close(&mut self, session_id: Uuid, frame: Option<CloseFrame<'static>>) {
+        //fixme: this could should be removed after the deprecation of
+        // self::on_close() for WS Close Message processing
+        self.on_close(session_id, WebSocketMessage::Close(frame))
+            .await;
+    }
+
+    async fn on_close(&mut self, session_id: Uuid, msg: WebSocketMessage);
 }
 
 /// Our websocket wrapper
