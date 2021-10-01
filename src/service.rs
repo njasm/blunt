@@ -7,7 +7,7 @@ use async_tungstenite::tungstenite::protocol::{CloseFrame, Role};
 use async_tungstenite::WebSocketStream;
 use hyper::server::conn::{AddrIncoming, AddrStream, Http};
 use hyper::service::Service;
-use hyper::{Body, Request, Response, Server, StatusCode};
+use hyper::Server as HyperServer;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -15,9 +15,11 @@ use std::task::{Context, Poll};
 use tokio::net::TcpStream;
 
 use crate::endpoints::ForPath;
+use crate::rt::mpsc::{unbounded_channel, UnboundedSender};
+use crate::server::Server;
+use crate::{spawn, Body, Request, Response, StatusCode};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 pub(crate) struct Router {
     tx: UnboundedSender<RequestType>,
@@ -28,7 +30,7 @@ impl Router {
     /// Upgrade to a websocket connection
     fn upgrade(&mut self, mut req: Request<Body>) {
         let tx = self.tx.clone();
-        tokio::task::spawn(async move {
+        spawn(async move {
             match hyper::upgrade::on(&mut req).await {
                 Ok(upgraded) => {
                     let tcp_stream = match upgraded.downcast::<AddrStream>() {
@@ -74,7 +76,7 @@ impl Service<Request<Body>> for Router {
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
         // favicon.ico
-        if req.uri().path() == "/favicon.ico" {
+        if req.uri().path().to_lowercase() == "/favicon.ico" {
             return Box::pin(async {
                 Ok(Response::builder()
                     .status(StatusCode::NO_CONTENT)
@@ -103,7 +105,7 @@ impl Service<Request<Body>> for Router {
                     let (parts, _) = match tungstenite_create_response(&r) {
                         Ok(resp) => resp.into_parts(),
                         Err(e) => {
-                            tracing::error!("{:?}:{}", e, e);
+                            tracing::error!("{:?}", e);
                             return Box::pin(async {
                                 Ok(Response::builder()
                                     .status(StatusCode::BAD_REQUEST)
@@ -153,12 +155,12 @@ impl Service<Request<Body>> for Router {
 }
 
 pub(crate) struct HttpService {
-    engine: crate::Server,
+    engine: crate::server::Server,
     registered_paths: HashMap<&'static str, ForPath>,
 }
 
 impl HttpService {
-    pub(crate) fn new(engine: crate::Server) -> Self {
+    pub(crate) fn new(engine: Server) -> Self {
         let paths = engine.endpoints.get_paths();
         Self {
             engine,
@@ -166,10 +168,10 @@ impl HttpService {
         }
     }
 
-    pub(crate) async fn serve(self, addrs: SocketAddr) -> Server<AddrIncoming, HttpService> {
+    pub(crate) async fn serve(self, addrs: SocketAddr) -> HyperServer<AddrIncoming, HttpService> {
         let incoming = AddrIncoming::bind(&addrs).unwrap();
         hyper::server::Builder::new(incoming, Http::new())
-            .http2_max_concurrent_streams(1024u32)
+            //.http2_max_concurrent_streams(1024u32)
             .serve(self)
     }
 }
@@ -191,13 +193,13 @@ impl Service<&AddrStream> for HttpService {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) enum RequestType {
     Socket(WebSocketConnWrapper),
     Web(WebConnWrapper),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct WebSocketConnWrapper {
     ws: Arc<WebSocketStream<TokioAdapter<TcpStream>>>,
     ctx: ConnectionContext,
